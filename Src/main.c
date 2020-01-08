@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include "./Dspin/dspin.h"
 /* USER CODE END Includes */
 
@@ -68,6 +69,7 @@ int log_uart_raw(uint8_t* data, uint16_t len);
 void motor_run(int count);
 void cmd_input(int count);
 void cmd_run(char* cmd);
+void detect_cn1(int count);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -129,8 +131,8 @@ int main(void) {
 		cmd_input(count);
 		// motor
 		motor_run(count);
-
-
+		// detect switch on CN1
+		detect_cn1(count);
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -265,6 +267,12 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_PULLUP;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
+	/*Configure GPIO pin : SW2_Pin */
+	GPIO_InitStruct.Pin = SW2_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(SW2_GPIO_Port, &GPIO_InitStruct);
+
 	/*Configure GPIO pins : PA4 PA8 */
 	GPIO_InitStruct.Pin = GPIO_PIN_4 | GPIO_PIN_8;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -272,12 +280,22 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
+	/*Configure GPIO pin : CN1_Pin */
+	GPIO_InitStruct.Pin = CN1_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	HAL_GPIO_Init(CN1_GPIO_Port, &GPIO_InitStruct);
+
 	/*Configure GPIO pin : PC9 */
 	GPIO_InitStruct.Pin = GPIO_PIN_9;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+	/* EXTI interrupt init*/
+	HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(EXTI1_IRQn);
 
 }
 
@@ -314,7 +332,8 @@ void cycle_tick_start() {
 void cycle_tick_sleep_to(uint32_t ms) {
 	uint32_t elapsed = HAL_GetTick() - tickstart;
 	if (ms < elapsed) {
-		log_uart_f("[Warning] Cycle Time Exceeded, time used: %d, target: %d.", elapsed, ms);
+		log_uart_f("[Warning] Cycle Time Exceeded, time used: %d, target: %d.",
+				elapsed, ms);
 		return;
 	}
 	while (ms > (HAL_GetTick() - tickstart))
@@ -342,7 +361,7 @@ void cmd_input(int count) {
 		} else if (last == '\b' || last == 0x7f) {
 			// BS or DEL char, some terminal may send DEL instead of BS.
 			cmdlen -= 2;
-			if(cmdlen < 0) {
+			if (cmdlen < 0) {
 				cmdlen = 0;
 			}
 		}
@@ -359,31 +378,45 @@ void cmd_run(char* cmd) {
 	// debug
 	log_uart_f("Get Cmd: %s\n", cmd);
 	// motor command
-	if(strncmp(cmd, "motor run ", 10) == 0) {
+	if (strncmp(cmd, "motor run ", 10) == 0) {
 		// cmd starts with "motor "
 		// speed 3000 ~ 40000
 		int speed, dir;
 		int minsp = 3000, maxsp = 40000;
 		sscanf(cmd, "motor run %d %d", &dir, &speed);
-		if(speed < minsp || speed > maxsp) {
-			log_uart_f("[Error] Speed not in range: %d, range is %d ~ %d.\n", speed, minsp, maxsp);
+		if (speed < minsp || speed > maxsp) {
+			log_uart_f("[Error] Speed not in range: %d, range is %d ~ %d.\n",
+					speed, minsp, maxsp);
 			return;
 		}
-		if(dir != 0 && dir != 1) {
+		if (dir != 0 && dir != 1) {
 			log_uart("[Error] Dir should be 0 or 1. \n");
 			return;
 		}
 		dSPIN_Run(dir == 0 ? FWD : REV, speed);
-	} else if(strncmp(cmd, "motor stop", 10) == 0) {
+	} else if (strncmp(cmd, "motor stop", 10) == 0) {
 		dSPIN_Soft_Stop();
 	} else {
 		log_uart_f("Command not recognized: %s\n", cmd);
 	}
 }
 
+static int cn1_last = 0;
+void detect_cn1(int count) {
+	// avoid shake
+	// only trigger once in 200ms
+	if(abs(count - cn1_last) > 20) {
+		cn1_last = count;
+		// if CN1 signal is low
+		if(!(CN1_GPIO_Port -> IDR & CN1_Pin)) {
+			dSPIN_Hard_Stop();
+		}
+	}
+}
+
 int motor_is_init = 0;
 void motor_run(int count) {
-	if(!motor_is_init) {
+	if (!motor_is_init) {
 		log_uart("Motor start\n");
 		motor_is_init = 1;
 		dSPIN_Run(REV, 1000);
