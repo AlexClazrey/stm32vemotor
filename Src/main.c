@@ -130,6 +130,7 @@ int main(void) {
 		// motor
 		motor_run(count);
 
+
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -338,6 +339,12 @@ void cmd_input(int count) {
 		} else if (last == '\r') {
 			// omit CR
 			cmdlen--;
+		} else if (last == '\b' || last == 0x7f) {
+			// BS or DEL char, some terminal may send DEL instead of BS.
+			cmdlen -= 2;
+			if(cmdlen < 0) {
+				cmdlen = 0;
+			}
 		}
 		// if limit is reached.
 		if (cmdlen >= cmdlim) {
@@ -351,22 +358,36 @@ void cmd_input(int count) {
 void cmd_run(char* cmd) {
 	// debug
 	log_uart_f("Get Cmd: %s\n", cmd);
+	// motor command
+	if(strncmp(cmd, "motor run ", 10) == 0) {
+		// cmd starts with "motor "
+		// speed 3000 ~ 40000
+		int speed, dir;
+		int minsp = 3000, maxsp = 40000;
+		sscanf(cmd, "motor run %d %d", &dir, &speed);
+		if(speed < minsp || speed > maxsp) {
+			log_uart_f("[Error] Speed not in range: %d, range is %d ~ %d.\n", speed, minsp, maxsp);
+			return;
+		}
+		if(dir != 0 && dir != 1) {
+			log_uart("[Error] Dir should be 0 or 1. \n");
+			return;
+		}
+		dSPIN_Run(dir == 0 ? FWD : REV, speed);
+	} else if(strncmp(cmd, "motor stop", 10) == 0) {
+		dSPIN_Soft_Stop();
+	} else {
+		log_uart_f("Command not recognized: %s\n", cmd);
+	}
 }
 
+int motor_is_init = 0;
 void motor_run(int count) {
-	uint32_t motcnt = count % 2500;
-	if (motcnt == 0) {
-		log_uart("Motor 1\n");
+	if(!motor_is_init) {
+		log_uart("Motor start\n");
+		motor_is_init = 1;
 		dSPIN_Run(REV, 1000);
 	}
-	if (motcnt == 500)
-		change_speed(1000, 8000, 5, REV);
-	if (motcnt == 1000)
-		change_speed(8000, 0, 5, REV);
-	if (motcnt == 1500)
-		change_speed(0, 8000, 5, FWD);
-	if (motcnt == 2000)
-		dSPIN_Soft_Stop();
 }
 
 void change_speed(uint32_t cur, uint32_t target, uint32_t time,
