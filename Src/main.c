@@ -28,6 +28,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include "./Dspin/dspin.h"
+#include "can_io.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,6 +47,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+CAN_HandleTypeDef hcan;
+
 SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart1;
@@ -59,9 +62,8 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_CAN_Init(void);
 /* USER CODE BEGIN PFP */
-void change_speed(uint32_t cur, uint32_t target, uint32_t time,
-		dSPIN_Direction_TypeDef direction);
 void cycle_tick_sleep_to(uint32_t ms);
 void cycle_tick_start();
 int log_uart(char* cstr);
@@ -70,6 +72,9 @@ void motor_run(int count);
 void cmd_input(int count);
 void cmd_run(char* cmd);
 void detect_cn1(int count);
+void ds_acc_set(uint32_t cur, uint32_t target, uint32_t time_sec);
+void ds_commit();
+void can_cmd_run(uint8_t* data, uint8_t len);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -106,13 +111,13 @@ int main(void) {
 	MX_GPIO_Init();
 	MX_SPI1_Init();
 	MX_USART1_UART_Init();
+	MX_CAN_Init();
 	/* USER CODE BEGIN 2 */
-	while (L6470_BUSY1())
-		;
 	L6470_Configuration1();
-	while (L6470_BUSY1())
-		;
-
+	can_init();
+	can_listener(can_cmd_run);
+	HAL_CAN_Start(&hcan);
+	HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
@@ -136,6 +141,7 @@ int main(void) {
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
+		ds_commit();
 		cycle_tick_sleep_to(countintv);
 	}
 	/* USER CODE END 3 */
@@ -151,12 +157,13 @@ void SystemClock_Config(void) {
 
 	/** Initializes the CPU, AHB and APB busses clocks
 	 */
-	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+	RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+	RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
 	RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-	RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
 	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI_DIV2;
-	RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL6;
+	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+	RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL3;
 	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
 		Error_Handler();
 	}
@@ -172,6 +179,44 @@ void SystemClock_Config(void) {
 	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK) {
 		Error_Handler();
 	}
+	/** Enables the Clock Security System
+	 */
+	HAL_RCC_EnableCSS();
+}
+
+/**
+ * @brief CAN Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_CAN_Init(void) {
+
+	/* USER CODE BEGIN CAN_Init 0 */
+
+	/* USER CODE END CAN_Init 0 */
+
+	/* USER CODE BEGIN CAN_Init 1 */
+
+	/* USER CODE END CAN_Init 1 */
+	hcan.Instance = CAN1;
+	hcan.Init.Prescaler = 16;
+	hcan.Init.Mode = CAN_MODE_NORMAL;
+	hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
+	hcan.Init.TimeSeg1 = CAN_BS1_4TQ;
+	hcan.Init.TimeSeg2 = CAN_BS2_2TQ;
+	hcan.Init.TimeTriggeredMode = DISABLE;
+	hcan.Init.AutoBusOff = DISABLE;
+	hcan.Init.AutoWakeUp = DISABLE;
+	hcan.Init.AutoRetransmission = DISABLE;
+	hcan.Init.ReceiveFifoLocked = DISABLE;
+	hcan.Init.TransmitFifoPriority = DISABLE;
+	if (HAL_CAN_Init(&hcan) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN CAN_Init 2 */
+
+	/* USER CODE END CAN_Init 2 */
+
 }
 
 /**
@@ -253,6 +298,8 @@ static void MX_GPIO_Init(void) {
 	__HAL_RCC_GPIOC_CLK_ENABLE()
 	;
 	__HAL_RCC_GPIOA_CLK_ENABLE()
+	;
+	__HAL_RCC_GPIOB_CLK_ENABLE()
 	;
 
 	/*Configure GPIO pin Output Level */
@@ -346,6 +393,7 @@ uint32_t cmdlim = 150; // command line length limit
 
 // Read UART input if char is available.
 // LF triggers cmd_run function.
+int ds_speed = 0, ds_dir = 0, ds_acc = 0, ds_hard_stop = 0;
 void cmd_input(int count) {
 	while (HAL_UART_Receive(&huart1, cmdbuf + cmdlen, 1, 0) == HAL_OK) {
 		char last = (char) cmdbuf[cmdlen];
@@ -374,71 +422,164 @@ void cmd_input(int count) {
 	}
 }
 
+const uint8_t CAN_CMD_VER = 1;
+const uint8_t CAN_CMD_RUN = 1;
+const uint8_t CAN_CMD_STOP = 2;
+const uint8_t CAN_CMD_STRING = 10;
+
+int read_run_num(char* cmd, int* out_speed, int* out_dir);
+void can_send_feedback(HAL_StatusTypeDef send_res);
 void cmd_run(char* cmd) {
 	// debug
-	log_uart_f("Get Cmd: %s\n", cmd);
-	// motor command
+	log_uart_f("[Info] Get Cmd: %s\n", cmd);
+	uint8_t msg[8];
+	msg[0] = CAN_CMD_VER;
 	if (strncmp(cmd, "motor run ", 10) == 0) {
-		// cmd starts with "motor "
-		// speed 3000 ~ 40000
 		int speed, dir;
-		int minsp = 3000, maxsp = 40000;
-		sscanf(cmd, "motor run %d %d", &dir, &speed);
-		if (speed < minsp || speed > maxsp) {
-			log_uart_f("[Error] Speed not in range: %d, range is %d ~ %d.\n",
-					speed, minsp, maxsp);
-			return;
+		if (read_run_num(cmd + 10, &speed, &dir) == 0) {
+			ds_dir = dir == 0 ? FWD : REV;
+			ds_speed = speed;
 		}
-		if (dir != 0 && dir != 1) {
-			log_uart("[Error] Dir should be 0 or 1. \n");
-			return;
-		}
-		dSPIN_Run(dir == 0 ? FWD : REV, speed);
 	} else if (strncmp(cmd, "motor stop", 10) == 0) {
-		dSPIN_Soft_Stop();
+		ds_speed = 0;
+	} else if (strncmp(cmd, "can hi", 6) == 0) {
+		msg[1] = CAN_CMD_STRING;
+		strncpy((char*)msg + 2, "hi", 3);
+		can_send_feedback(can_msg_add(msg, 5));
+	} else if (strncmp(cmd, "can motor run ", 14) == 0) {
+		int speed, dir;
+		if (read_run_num(cmd + 14, &speed, &dir) == 0) {
+			msg[1] = CAN_CMD_RUN;
+			msg[2] = dir;
+			msg[3] = speed / 256;
+			msg[4] = speed % 256;
+			can_send_feedback(can_msg_add(msg, 5));
+		}
+	} else if (strncmp(cmd, "can motor stop", 14) == 0) {
+		msg[1] = CAN_CMD_STOP;
+		can_send_feedback(can_msg_add(msg, 2));
 	} else {
-		log_uart_f("Command not recognized: %s\n", cmd);
+		log_uart_f("[Error] Command not recognized: %s\n", cmd);
 	}
 }
 
-static int cn1_last = 0;
+int read_run_num(char* cmd, int* out_speed, int* out_dir) {
+	int dir, speed;
+	// speed 1000 ~ 40000
+	int minsp = 1000, maxsp = 40000;
+	sscanf(cmd, "%d %d", &dir, &speed);
+	if (speed < minsp || speed > maxsp) {
+		log_uart_f("[Error] Speed not in range: %d, range is %d ~ %d.\n", speed,
+				minsp, maxsp);
+		return 1;
+	}
+	if (dir != 0 && dir != 1) {
+		log_uart("[Error] Dir should be 0 or 1. \n");
+		return 1;
+	}
+	*out_speed = speed;
+	*out_dir = dir;
+	return 0;
+}
+
+void can_send_feedback(HAL_StatusTypeDef send_res) {
+	if(send_res == HAL_OK) {
+		log_uart_f("[OK] CAN Sent.\n");
+	} else {
+		log_uart_f("[Error] CAN Send failed.\n");
+	}
+}
+
+static int cn1_hold_count = 0;
 void detect_cn1(int count) {
-	// avoid shake
-	// only trigger once in 200ms
-	if(abs(count - cn1_last) > 20) {
-		cn1_last = count;
-		// if CN1 signal is low
-		if(!(CN1_GPIO_Port -> IDR & CN1_Pin)) {
-			dSPIN_Hard_Stop();
+	// if CN1 signal is low
+	if (!(CN1_GPIO_Port->IDR & CN1_Pin)) {
+		// avoid shake - hold 50ms to trigger
+		if (cn1_hold_count >= 5) {
+			cn1_hold_count = 0;
+			ds_speed = 0;
+			ds_hard_stop = 1;
+		} else {
+			cn1_hold_count++;
 		}
+	} else {
+		cn1_hold_count = 0;
 	}
 }
 
 int motor_is_init = 0;
 void motor_run(int count) {
 	if (!motor_is_init) {
-		log_uart("Motor start\n");
+		log_uart("[Info] Motor start\n");
 		motor_is_init = 1;
-		dSPIN_Run(REV, 1000);
+		ds_dir = REV;
+		ds_speed = 1000;
 	}
 }
 
-void change_speed(uint32_t cur, uint32_t target, uint32_t time,
-		dSPIN_Direction_TypeDef direction) {
-	while (L6470_BUSY1())
-		;
-	uint32_t acc = (target - cur) / time;
-	// TODO ACC or DEC is not implemented in dspin.c
-	if (acc > 0) {
-		dSPIN_Set_Param(dSPIN_ACC, acc);
+void ds_acc_set(uint32_t cur, uint32_t target, uint32_t time_sec) {
+	ds_acc = (target - cur) / time_sec;
+}
+
+int ds_last_speed = 0, ds_last_dir = 0, ds_last_acc = 0;
+void ds_commit() {
+	// 这里有一点隐患 如果写入不成功的话这里也没有检测
+	if (ds_speed == 0 && ds_last_speed != 0) {
+		if (ds_hard_stop) {
+			dSPIN_Hard_Stop();
+			log_uart_f("[Info] DS Hard Stop Commit\n");
+			ds_hard_stop = 0;
+		} else {
+			dSPIN_Soft_Stop();
+			log_uart_f("[Info] DS Soft Stop Commit\n");
+		}
+		ds_last_speed = ds_speed;
+	}
+	if (ds_acc != ds_last_acc) {
+		// TODO ACC or DEC is not implemented in dspin.c
+		if (ds_acc > 0) {
+			dSPIN_Set_Param(dSPIN_ACC, ds_acc);
+		} else {
+			dSPIN_Set_Param(dSPIN_DEC, -ds_acc);
+		}
+		log_uart_f("[Info] DS Acc Commit acc: %d\n", ds_acc);
+		ds_last_acc = ds_acc;
+	}
+	if (ds_speed > 0 && (ds_last_dir != ds_dir || ds_last_speed != ds_speed)) {
+		dSPIN_Run(ds_dir, ds_speed);
+		log_uart_f("[Info] DS Speed Commit dir: %d, speed: %d\n", ds_dir,
+				ds_speed);
+		ds_last_speed = ds_speed;
+		ds_last_dir = ds_dir;
+	}
+}
+
+void can_cmd_run(uint8_t* data, uint8_t len) {
+	// safe
+	data[len] = 0;
+	if (len >= 2) {
+		uint8_t ver = data[0], cmd = data[1];
+		if (ver > CAN_CMD_VER) {
+			log_uart_f("[Warning] CAN Message Version Higher than me.\n");
+		}
+		if (cmd == CAN_CMD_RUN) {
+			if (len == 5) {
+				ds_dir = data[2];
+				ds_speed = data[3] * 256 + data[4];
+			} else {
+				log_uart_f(
+						"[Error] CAN Invalid Message: Run command length should be 5, now %d.\n",
+						len);
+			}
+		} else if (cmd == CAN_CMD_STOP) {
+			ds_speed = 0;
+		} else if (cmd == CAN_CMD_STRING) {
+			log_uart_f("[Info] CAN Received: %s\n", data + 2);
+		}
 	} else {
-		dSPIN_Set_Param(dSPIN_DEC, -acc);
+		log_uart_f("[Warning] CAN Invalid Message: Too Short.\n");
 	}
-	while (L6470_BUSY1())
-		;
-	dSPIN_Run(direction, target);
 }
-
 /* USER CODE END 4 */
 
 /**
