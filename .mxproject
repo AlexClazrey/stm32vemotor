@@ -1,7 +1,7 @@
 [PreviousGenFiles]
-HeaderPath=C:/Users/alexc/CodeWork/STM32/VEMotor/Inc
+HeaderPath=D:/Course/StepMotor/STM32CubeWorkspace/VEMotor/Inc
 HeaderFiles=stm32f1xx_it.h;stm32f1xx_hal_conf.h;main.h;
-SourcePath=C:/Users/alexc/CodeWork/STM32/VEMotor/Src
+SourcePath=D:/Course/StepMotor/STM32CubeWorkspace/VEMotor/Src
 SourceFiles=stm32f1xx_it.c;stm32f1xx_hal_msp.c;main.c;
 
 [PreviousLibFiles]
