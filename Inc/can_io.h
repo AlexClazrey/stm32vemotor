@@ -12,7 +12,7 @@ extern CAN_TxHeaderTypeDef can_tx_header;
 extern uint32_t can_tx_mailbox;
 
 void can_init();
-void can_listener(CAN_MsgListener listener);
+void can_set_listener(CAN_MsgListener listener);
 HAL_StatusTypeDef can_msg_add(uint8_t* data, uint8_t len);
 void can_msg_get();
 

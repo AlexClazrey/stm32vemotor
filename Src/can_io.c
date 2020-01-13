@@ -20,9 +20,12 @@ void can_init() {
 	can_filter.FilterScale = CAN_FILTERSCALE_32BIT;
 	can_filter.FilterActivation = CAN_FILTER_ENABLE;
 	HAL_CAN_ConfigFilter(&hcan, &can_filter);
+
+	HAL_CAN_Start(&hcan);
+	HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
 }
 
-void can_listener(CAN_MsgListener listener) {
+void can_set_listener(CAN_MsgListener listener) {
 	can_lis = listener;
 }
 
@@ -32,6 +35,7 @@ HAL_StatusTypeDef can_msg_add(uint8_t* data, uint8_t len) {
 		return HAL_ERROR;
 	}
 	can_tx_header.DLC = len;
+	// 这里的函数直接会读入 header 的数据操作不保存引用，所以可以安全复用不担心 header 数据出错。
 	return HAL_CAN_AddTxMessage(&hcan, &can_tx_header, data, &can_tx_mailbox);
 }
 

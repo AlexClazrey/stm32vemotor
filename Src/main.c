@@ -25,9 +25,10 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdlib.h>
 #include "./Dspin/dspin.h"
+#include "log_uart.h"
+#include "lm.h"
 #include "can_io.h"
 /* USER CODE END Includes */
 
@@ -52,8 +53,29 @@ CAN_HandleTypeDef hcan;
 SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+int cn1_indicator = 0; // 这个变量告诉你cn1有没有被按
+struct lm_model lmmod = { 0 };
+struct lm_cmd lmcmd = { 0 };
+//struct lm_cmd lmcmd_immed = { 0 };
+// 不要用即时指令，这会打乱逻辑，
+// 更改flag的一些命令想知道到底有没有成功用之后的检测。
+int lm_cycle = 0; // 循环测试指示器
+const int lm_cycle_out = -110000;
+const int lm_cycle_in = -5000;
+int lm_home_set = 0; // 在CN1按下的期间有没有校准过HOME位置
+
+uint8_t cmdbuf[200] = { 0 };
+int32_t cmdlen = 0; // must be signed here
+uint32_t cmdlim = 150; // command line length limit
+
+const uint8_t CAN_CMD_VER = 2;
+const uint8_t CAN_CMD_LM = 1;
+const uint8_t CAN_CMD_STRING = 10;
+
+uint32_t tickstart = 0;
 
 /* USER CODE END PV */
 
@@ -63,15 +85,13 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_CAN_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 void cycle_tick_sleep_to(uint32_t ms);
 void cycle_tick_start();
-int log_uart(char* cstr);
-int log_uart_raw(uint8_t* data, uint16_t len);
-void motor_run(int count);
 void cmd_input(int count);
-void cmd_run(char* cmd);
-void detect_cn1(int count);
+void cmd_parse(char* cmd);
+void detect_cn1();
 void ds_acc_set(uint32_t cur, uint32_t target, uint32_t time_sec);
 void ds_commit();
 void can_cmd_run(uint8_t* data, uint8_t len);
@@ -112,16 +132,41 @@ int main(void) {
 	MX_SPI1_Init();
 	MX_USART1_UART_Init();
 	MX_CAN_Init();
+	MX_USART2_UART_Init();
 	/* USER CODE BEGIN 2 */
 	L6470_Configuration1();
+	log_set_port(&huart1);
 	can_init();
-	can_listener(can_cmd_run);
-	HAL_CAN_Start(&hcan);
-	HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
+	can_set_listener(can_cmd_run);
+
+	log_uart(LOGDEBUG, "Start initializing.");
+	log_uart(LOGDEBUG, "Moving to initial position.");
+	lmcmd.type = lm_cmd_speed;
+	lmcmd.dir_hard = 1;
+	lmcmd.pos_speed = 10000;
+	if (lm_commit(&lmcmd, &lmmod) != 0) {
+		log_uart(LOGERROR, "Reset position failed.");
+	} else {
+		uint32_t init_tick = HAL_GetTick();
+		while (1) {
+			detect_cn1();
+			if (cn1_indicator) {
+				log_uart(LOGDEBUG, "Moving finished");
+				lmcmd.type = lm_cmd_reset;
+				lm_commit(&lmcmd, &lmmod);
+				break;
+			} else if (HAL_GetTick() - init_tick > 30000) {
+				log_uart(LOGERROR, "Moving timeout.");
+				break;
+			}
+		}
+	}
+	log_uart(LOGDEBUG, "Initialize finished.");
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
+	log_uart(LOGDEBUG, "Start listening.");
 	uint32_t count = (uint32_t) -1;
 	uint32_t countintv = 10; // 10ms every cycle
 	uint32_t countlim = 100000; // 1000s one big cycle
@@ -132,16 +177,76 @@ int main(void) {
 		if (count == countlim) {
 			count = 0;
 		}
-		// cmd store
-		cmd_input(count);
-		// motor
-		motor_run(count);
-		// detect switch on CN1
-		detect_cn1(count);
-		/* USER CODE END WHILE */
 
+		// cmd store
+		// TODO 其实读取 UART 输入应该做成中断模式的，直接写在循环里面是 Arduino 导致的坏习惯会限制很多
+		// TODO 而且串口要比 CAN 不稳定得多，有可能会漏掉一些字节。
+		// 这些稳定性的确认重发都没有做。
+		cmd_input(count);
+		// detect switch on CN1
+		detect_cn1();
+
+
+		// 这芯片也不是完美的，有时候移动到一半就认为自己移动完了这个很麻烦。
+		if (lm_cycle) {
+			if (L6470_BUSY1()) {
+				// do nothing here
+			} else if ((lmmod.state == lm_state_pos && lmmod.pos == lm_cycle_in)
+					|| lmmod.state == lm_state_stop) {
+				// state stop is for cn1 being pressed.
+				if (cn1_indicator) {
+					log_uart(LOGINFO, "Move forward");
+					lmcmd.type = lm_cmd_pos;
+					lmcmd.pos_speed = lm_cycle_out;
+				} else {
+					if (lmmod.state != lm_state_speed) {
+						log_uart(LOGINFO, "Finding Home");
+						lmcmd.type = lm_cmd_speed;
+						lmcmd.pos_speed = 10000;
+						lmcmd.dir_hard = 1;
+					}
+				}
+			} else if (lmmod.state == lm_state_pos && lmmod.pos == lm_cycle_out) {
+				log_uart(LOGINFO, "Move back");
+				lmcmd.type = lm_cmd_pos;
+				lmcmd.pos_speed = lm_cycle_in;
+			}
+		}
+
+		// if cn1 is pressed only stop 1 - FWD - close direction
+		// TODO add pos detection after implementing read pos function
+		if (cn1_indicator) {
+			// cn1 按下的时候重置 home，这个只能在按下期间执行一次
+			// 在 pos 状态下重置 home 会发生惨剧。
+			// 所以如果要解决越来越超内的误差的话，就不要回到0位置。
+			if(!lm_home_set && lmmod.state != lm_state_pos) {
+				log_uart(LOGINFO, "Set home");
+				lmcmd.type = lm_cmd_set_home;
+			}
+			// 如果使用 lmcmd_immed 的话，下面的判断有可能在错误的时间执行。
+			// 所以就好好用普通指令
+			if ((lmcmd.type == lm_cmd_speed && lmcmd.dir_hard == 1)
+					|| (lmmod.state == lm_state_speed && lmmod.dir == 1)
+					|| (lmcmd.type == lm_cmd_pos && lmcmd.pos_speed > 0)
+					|| (lmmod.state == lm_state_pos && lmmod.pos > 0)) {
+				log_uart(LOGWARN,
+						"CN1 is pressed, motor will not move backward.");
+				lmcmd.type = lm_cmd_stop;
+				lmcmd.dir_hard = 1;
+			}
+		} else {
+			lm_home_set = 0;
+		}
+
+
+		// 如果过冲进入保护状态那么重置 L6470
+		// TODO
+		/* USER CODE END WHILE */
 		/* USER CODE BEGIN 3 */
-		ds_commit();
+		if(lmcmd.type == lm_cmd_set_home) {
+			lm_home_set = 1;
+		}
+		lm_commit(&lmcmd, &lmmod);
 		cycle_tick_sleep_to(countintv);
 	}
 	/* USER CODE END 3 */
@@ -287,6 +392,37 @@ static void MX_USART1_UART_Init(void) {
 }
 
 /**
+ * @brief USART2 Initialization Function
+ * @param None
+ * @retval None
+ */
+static void MX_USART2_UART_Init(void) {
+
+	/* USER CODE BEGIN USART2_Init 0 */
+
+	/* USER CODE END USART2_Init 0 */
+
+	/* USER CODE BEGIN USART2_Init 1 */
+
+	/* USER CODE END USART2_Init 1 */
+	huart2.Instance = USART2;
+	huart2.Init.BaudRate = 115200;
+	huart2.Init.WordLength = UART_WORDLENGTH_8B;
+	huart2.Init.StopBits = UART_STOPBITS_1;
+	huart2.Init.Parity = UART_PARITY_NONE;
+	huart2.Init.Mode = UART_MODE_TX_RX;
+	huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+	huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+	if (HAL_UART_Init(&huart2) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN USART2_Init 2 */
+
+	/* USER CODE END USART2_Init 2 */
+
+}
+
+/**
  * @brief GPIO Initialization Function
  * @param None
  * @retval None
@@ -347,31 +483,8 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
-int imax(int a, int b) {
-	return a > b ? a : b;
-}
 
-int log_uart_raw(uint8_t* data, uint16_t len) {
-	// 115200 Baud Rate ~= 80000 bps = 10KBps = 10 Byte / ms
-	return HAL_UART_Transmit(&huart1, data, len, imax(len / 8, 5));
-}
-
-int log_uart(char* cstr) {
-	return log_uart_raw((uint8_t*) cstr, strlen(cstr));
-}
-
-char logbuf[4096];
-// output limit is 4095 char.
-int log_uart_f(const char* format, ...) {
-	va_list args;
-	va_start(args, format);
-	vsnprintf(logbuf, 4095, format, args);
-	int res = log_uart(logbuf);
-	va_end(args);
-	return res;
-}
-
-uint32_t tickstart = 0;
+// ---------- Time
 void cycle_tick_start() {
 	tickstart = HAL_GetTick();
 }
@@ -379,7 +492,7 @@ void cycle_tick_start() {
 void cycle_tick_sleep_to(uint32_t ms) {
 	uint32_t elapsed = HAL_GetTick() - tickstart;
 	if (ms < elapsed) {
-		log_uart_f("[Warning] Cycle Time Exceeded, time used: %d, target: %d.",
+		log_uart_f(LOGWARN, "Cycle Time Exceeded, time used: %d, target: %d.",
 				elapsed, ms);
 		return;
 	}
@@ -387,25 +500,20 @@ void cycle_tick_sleep_to(uint32_t ms) {
 		;
 }
 
-uint8_t cmdbuf[200] = { 0 };
-uint32_t cmdlen = 0;
-uint32_t cmdlim = 150; // command line length limit
-
+// --------- Command
 // Read UART input if char is available.
-// LF triggers cmd_run function.
-int ds_speed = 0, ds_dir = 0, ds_acc = 0, ds_hard_stop = 0;
+// LF or CR triggers cmd_run function.
 void cmd_input(int count) {
 	while (HAL_UART_Receive(&huart1, cmdbuf + cmdlen, 1, 0) == HAL_OK) {
 		char last = (char) cmdbuf[cmdlen];
 		cmdlen++;
-		if (last == '\n') {
-			// overwrite last LF char.
-			cmdbuf[cmdlen - 1] = 0;
-			cmd_run((char*) cmdbuf);
-			cmdlen = 0;
-		} else if (last == '\r') {
-			// omit CR
-			cmdlen--;
+		if (last == '\n' || last == '\r') {
+			if (cmdlen > 0) {
+				// overwrite last LF / CR char.
+				cmdbuf[cmdlen - 1] = 0;
+				cmd_parse((char*) cmdbuf);
+				cmdlen = 0;
+			}
 		} else if (last == '\b' || last == 0x7f) {
 			// BS or DEL char, some terminal may send DEL instead of BS.
 			cmdlen -= 2;
@@ -416,168 +524,165 @@ void cmd_input(int count) {
 		// if limit is reached.
 		if (cmdlen >= cmdlim) {
 			cmdbuf[cmdlen] = 0;
-			cmd_run((char*) cmdbuf);
+			cmd_parse((char*) cmdbuf);
 			cmdlen = 0;
 		}
 	}
 }
+static int read_mr_args(char* cmd, uint32_t* out_speed, uint32_t* out_dir);
+static HAL_StatusTypeDef can_send_feedback(HAL_StatusTypeDef send_res);
 
-const uint8_t CAN_CMD_VER = 1;
-const uint8_t CAN_CMD_RUN = 1;
-const uint8_t CAN_CMD_STOP = 2;
-const uint8_t CAN_CMD_STRING = 10;
+/* Command format is:
+ * [#<id> ](mr|ms|mp|mreset|mhome|mcycle)[ <args>]
+ */
+uint32_t my_cmdid = 123;
+void cmd_parse(char* cmd) {
+	log_uart_f(LOGDEBUG, "Run: %s\n", cmd);
 
-int read_run_num(char* cmd, int* out_speed, int* out_dir);
-void can_send_feedback(HAL_StatusTypeDef send_res);
-void cmd_run(char* cmd) {
-	// debug
-	log_uart_f("[Info] Get Cmd: %s\n", cmd);
-	uint8_t msg[8];
-	msg[0] = CAN_CMD_VER;
-	if (strncmp(cmd, "motor run ", 10) == 0) {
-		int speed, dir;
-		if (read_run_num(cmd + 10, &speed, &dir) == 0) {
-			ds_dir = dir == 0 ? FWD : REV;
-			ds_speed = speed;
+	// if command has an id
+	uint32_t cmdid = 0;
+	if (cmd[0] == '#') {
+		size_t scanlen;
+		if (sscanf(cmd + 1, "%lu%n ", &cmdid, &scanlen) != 1) {
+			log_uart(LOGERROR, "Cmd id read error.");
+			return;
 		}
-	} else if (strncmp(cmd, "motor stop", 10) == 0) {
-		ds_speed = 0;
-	} else if (strncmp(cmd, "can hi", 6) == 0) {
-		msg[1] = CAN_CMD_STRING;
-		strncpy((char*)msg + 2, "hi", 3);
-		can_send_feedback(can_msg_add(msg, 5));
-	} else if (strncmp(cmd, "can motor run ", 14) == 0) {
-		int speed, dir;
-		if (read_run_num(cmd + 14, &speed, &dir) == 0) {
-			msg[1] = CAN_CMD_RUN;
-			msg[2] = dir;
-			msg[3] = speed / 256;
-			msg[4] = speed % 256;
-			can_send_feedback(can_msg_add(msg, 5));
+		cmd += scanlen + 1;
+	}
+
+	// parse command body
+	if (cmd[0] == 'm') {
+		if (strncmp(cmd + 1, "cycle", 5) == 0) {
+			lm_cycle = !lm_cycle;
+			if(lm_cycle) {
+				// kickstart
+				lmcmd.type = lm_cmd_pos;
+				lmcmd.pos_speed = lm_cycle_in;
+			}
+		} else {
+			if(lm_cycle) {
+				log_uart_f(LOGINFO, "Cycle off.");
+				lm_cycle = 0;
+			}
+			if (strncmp(cmd + 1, "home", 4) == 0) {
+				lmcmd.type = lm_cmd_set_home;
+			} else if (strncmp(cmd + 1, "reset", 5) == 0) {
+				lmcmd.type = lm_cmd_reset;
+			} else if (cmd[1] == 'r') {
+				uint32_t pos, dir;
+				if (read_mr_args(cmd + 3, &pos, &dir) != 2) {
+					log_uart(LOGERROR, "Read mr command failed.");
+					return;
+				}
+				lmcmd.pos_speed = pos;
+				lmcmd.dir_hard = dir;
+				lmcmd.type = lm_cmd_speed;
+			} else if (cmd[1] == 's') {
+				lmcmd.type = lm_cmd_stop;
+			} else if (cmd[1] == 'p') {
+				if (sscanf(cmd + 3, "%ld", &(lmcmd.pos_speed)) != 1) {
+					log_uart(LOGERROR, "Read mp command failed.");
+					return;
+				}
+				lmcmd.type = lm_cmd_pos;
+			} else {
+				log_uart(LOGERROR, "Command parse failed");
+				return;
+			}
 		}
-	} else if (strncmp(cmd, "can motor stop", 14) == 0) {
-		msg[1] = CAN_CMD_STOP;
-		can_send_feedback(can_msg_add(msg, 2));
 	} else {
-		log_uart_f("[Error] Command not recognized: %s\n", cmd);
+		log_uart(LOGERROR, "Command parse failed");
+		return;
+	}
+
+	// check local or CAN
+	if (cmdid == 0 || cmdid == my_cmdid) {
+	} else {
+		uint8_t msg[8];
+		uint32_t pos = lmcmd.pos_speed;
+		msg[0] = CAN_CMD_VER;
+		msg[1] = CAN_CMD_LM;
+		msg[2] = (uint8_t) (lmcmd.type);
+		msg[3] = (uint8_t) (pos >> 24);
+		msg[4] = (uint8_t) (pos >> 16);
+		msg[5] = (uint8_t) (pos >> 8);
+		msg[6] = (uint8_t) (pos);
+		msg[7] = (uint8_t) (lmcmd.dir_hard);
+		can_send_feedback(can_msg_add(msg, 8));
 	}
 }
 
-int read_run_num(char* cmd, int* out_speed, int* out_dir) {
-	int dir, speed;
-	// speed 1000 ~ 40000
-	int minsp = 1000, maxsp = 40000;
-	sscanf(cmd, "%d %d", &dir, &speed);
+static int read_mr_args(char* cmd, uint32_t* out_speed, uint32_t* out_dir) {
+	uint32_t dir, speed;
+	// speed 1 ~ 30
+	// 太高的速度在冲击时会引发L6470过流关闭
+	uint32_t minsp = 1, maxsp = 30;
+	if (sscanf(cmd, "%lu %lu", &dir, &speed) != 2) {
+		log_uart(LOGERROR, "Parse args failed.");
+		return 0;
+	}
 	if (speed < minsp || speed > maxsp) {
-		log_uart_f("[Error] Speed not in range: %d, range is %d ~ %d.\n", speed,
+		log_uart_f(LOGERROR, "Speed not in range: %d, range is %d ~ %d.", speed,
 				minsp, maxsp);
-		return 1;
+		return 0;
 	}
 	if (dir != 0 && dir != 1) {
-		log_uart("[Error] Dir should be 0 or 1. \n");
-		return 1;
+		log_uart(LOGERROR, "Dir should be 0 or 1.");
+		return 0;
 	}
-	*out_speed = speed;
+	*out_speed = speed * 1000;
 	*out_dir = dir;
-	return 0;
+	return 2;
 }
 
-void can_send_feedback(HAL_StatusTypeDef send_res) {
-	if(send_res == HAL_OK) {
-		log_uart_f("[OK] CAN Sent.\n");
+static HAL_StatusTypeDef can_send_feedback(HAL_StatusTypeDef send_res) {
+	if (send_res == HAL_OK) {
+		log_uart_f(LOGDEBUG, "CAN Sent.");
 	} else {
-		log_uart_f("[Error] CAN Send failed.\n");
+		log_uart_f(LOGERROR, "CAN Send failed.");
 	}
+	return send_res;
 }
 
 static int cn1_hold_count = 0;
-void detect_cn1(int count) {
+void detect_cn1() {
 	// if CN1 signal is low
 	if (!(CN1_GPIO_Port->IDR & CN1_Pin)) {
-		// avoid shake - hold 50ms to trigger
+		// avoid shake - hold at least 50ms to trigger
 		if (cn1_hold_count >= 5) {
-			cn1_hold_count = 0;
-			ds_speed = 0;
-			ds_hard_stop = 1;
+			if (!cn1_indicator) {
+				log_uart(LOGDEBUG, "CN1 pressed.");
+				cn1_indicator = 1;
+			}
 		} else {
 			cn1_hold_count++;
 		}
 	} else {
+		cn1_indicator = 0;
 		cn1_hold_count = 0;
 	}
 }
 
-int motor_is_init = 0;
-void motor_run(int count) {
-	if (!motor_is_init) {
-		log_uart("[Info] Motor start\n");
-		motor_is_init = 1;
-		ds_dir = REV;
-		ds_speed = 1000;
-	}
-}
-
-void ds_acc_set(uint32_t cur, uint32_t target, uint32_t time_sec) {
-	ds_acc = (target - cur) / time_sec;
-}
-
-int ds_last_speed = 0, ds_last_dir = 0, ds_last_acc = 0;
-void ds_commit() {
-	// 这里有一点隐患 如果写入不成功的话这里也没有检测
-	if (ds_speed == 0 && ds_last_speed != 0) {
-		if (ds_hard_stop) {
-			dSPIN_Hard_Stop();
-			log_uart_f("[Info] DS Hard Stop Commit\n");
-			ds_hard_stop = 0;
-		} else {
-			dSPIN_Soft_Stop();
-			log_uart_f("[Info] DS Soft Stop Commit\n");
-		}
-		ds_last_speed = ds_speed;
-	}
-	if (ds_acc != ds_last_acc) {
-		// TODO ACC or DEC is not implemented in dspin.c
-		if (ds_acc > 0) {
-			dSPIN_Set_Param(dSPIN_ACC, ds_acc);
-		} else {
-			dSPIN_Set_Param(dSPIN_DEC, -ds_acc);
-		}
-		log_uart_f("[Info] DS Acc Commit acc: %d\n", ds_acc);
-		ds_last_acc = ds_acc;
-	}
-	if (ds_speed > 0 && (ds_last_dir != ds_dir || ds_last_speed != ds_speed)) {
-		dSPIN_Run(ds_dir, ds_speed);
-		log_uart_f("[Info] DS Speed Commit dir: %d, speed: %d\n", ds_dir,
-				ds_speed);
-		ds_last_speed = ds_speed;
-		ds_last_dir = ds_dir;
-	}
-}
-
 void can_cmd_run(uint8_t* data, uint8_t len) {
-	// safe
-	data[len] = 0;
+	// no lm_commit here, program will commit on next cycle.
 	if (len >= 2) {
 		uint8_t ver = data[0], cmd = data[1];
 		if (ver > CAN_CMD_VER) {
-			log_uart_f("[Warning] CAN Message Version Higher than me.\n");
+			log_uart_f(LOGWARN, "CAN Message Version Higher than me.");
 		}
-		if (cmd == CAN_CMD_RUN) {
-			if (len == 5) {
-				ds_dir = data[2];
-				ds_speed = data[3] * 256 + data[4];
-			} else {
-				log_uart_f(
-						"[Error] CAN Invalid Message: Run command length should be 5, now %d.\n",
-						len);
-			}
-		} else if (cmd == CAN_CMD_STOP) {
-			ds_speed = 0;
+		if (cmd == CAN_CMD_LM) {
+			// 按照 cmd_run 里面的编码方法重新组装消息
+			lmcmd.type = data[2];
+			lmcmd.pos_speed = (int32_t) ((data[3] << 24) + (data[4] << 16)
+					+ (data[5] << 8) + (data[6]));
+			lmcmd.dir_hard = data[7];
 		} else if (cmd == CAN_CMD_STRING) {
-			log_uart_f("[Info] CAN Received: %s\n", data + 2);
+			char buf[8] = { 0 };
+			memcpy(buf, data + 2, len - 2);
+			log_uart_f(LOGINFO, "CAN Received: %s", buf);
 		}
 	} else {
-		log_uart_f("[Warning] CAN Invalid Message: Too Short.\n");
+		log_uart_f(LOGWARN, "CAN Invalid Message: Too Short.");
 	}
 }
 /* USER CODE END 4 */

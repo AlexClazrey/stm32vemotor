@@ -6,8 +6,8 @@
 #include "stm32f1xx.h"
 
 /* User Configuration */
-extern SPI_HandleTypeDef	hspi1; // this variable is in main.c
-#define dSPIN_SPI					&hspi1
+extern  SPI_HandleTypeDef	hspi1; // this variable is in main.c
+#define dSPIN_SPI			&hspi1
 
 #define dSPIN_nSS_Pin			GPIO_PIN_4
 #define dSPIN_nSS_Port		GPIOA

@@ -1,6 +1,5 @@
 #include "dspin.h"
 
-// #include "stdio.h"
 dSPIN_RegsStruct_TypeDef dSPIN_RegsStruct;
 
 unsigned char CS = 0x00;
@@ -363,6 +362,7 @@ void dSPIN_Reset_Pos(void) {
  * 输    入：无
  * 返    回：返回状态
  ******************************************************************/
+// 这个函数不会漏电
 void dSPIN_Soft_Stop(void) {
 	/* Send SoftStop operation code to dSPIN */
 	dSPIN_Write_Byte(dSPIN_SOFT_STOP);
