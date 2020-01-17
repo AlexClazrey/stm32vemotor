@@ -59,7 +59,7 @@ int log_uart(enum log_level level, char* cstr) {
 		state = log_uart_raw((uint8_t*) cstr, slen);
 		if (state != HAL_OK)
 			return state;
-		state = log_uart_raw((uint8_t*) "\r\n", 1);
+		state = log_uart_raw((uint8_t*) "\r\n", 2);
 		return state;
 	} else {
 		return -1;
