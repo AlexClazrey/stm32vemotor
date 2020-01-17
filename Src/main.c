@@ -56,12 +56,19 @@ UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+uint8_t machine_id = 123; // 这个是机器编号
+
 int cn1_indicator = 0; // 这个变量告诉你cn1有没有被按
 struct lm_model lmmod = { 0 };
 struct lm_cmd lmcmd = { 0 };
+struct lm_cmd lmparse = { 0 };
+struct lm_cmd lmcan = { 0 };
+int lmcan_cached = 0;
+
 //struct lm_cmd lmcmd_immed = { 0 };
-// 不要用即时指令，这会打乱逻辑，
+// 不要用lm_commit(lmcmd_immed)这样的即时指令，这会打乱逻辑，
 // 更改flag的一些命令想知道到底有没有成功用之后的检测。
+
 int lm_cycle = 0; // 循环测试指示器
 const int lm_cycle_out = -110000;
 const int lm_cycle_in = -5000;
@@ -90,7 +97,7 @@ static void MX_USART2_UART_Init(void);
 void cycle_tick_sleep_to(uint32_t ms);
 void cycle_tick_start();
 void cmd_input(int count);
-void cmd_parse(char* cmd);
+void cmd_parse_send(char* cmd);
 void detect_cn1();
 void ds_acc_set(uint32_t cur, uint32_t target, uint32_t time_sec);
 void ds_commit();
@@ -155,7 +162,7 @@ int main(void) {
 				lmcmd.type = lm_cmd_reset;
 				lm_commit(&lmcmd, &lmmod);
 				break;
-			} else if (HAL_GetTick() - init_tick > 30000) {
+			} else if (HAL_GetTick() - init_tick > 10000) {
 				log_uart(LOGERROR, "Moving timeout.");
 				break;
 			}
@@ -178,48 +185,61 @@ int main(void) {
 			count = 0;
 		}
 
-		// cmd store
-		// TODO 其实读取 UART 输入应该做成中断模式的，直接写在循环里面是 Arduino 导致的坏习惯会限制很多
-		// TODO 而且串口要比 CAN 不稳定得多，有可能会漏掉一些字节。
-		// 这些稳定性的确认重发都没有做。
-		cmd_input(count);
-		// detect switch on CN1
-		detect_cn1();
-
-
+		// cycle test 要放在模拟输入的位置。
 		// 这芯片也不是完美的，有时候移动到一半就认为自己移动完了这个很麻烦。
 		if (lm_cycle) {
 			if (L6470_BUSY1()) {
+				// 如果还在运转到某个pos的状态。在匀速模式下不会有busy。
 				// do nothing here
 			} else if ((lmmod.state == lm_state_pos && lmmod.pos == lm_cycle_in)
 					|| lmmod.state == lm_state_stop) {
-				// state stop is for cn1 being pressed.
+				// state pos 是运转到了最里面没有进入匀速模式
+				// state stop 是匀速模式碰到了CN1的结果后
 				if (cn1_indicator) {
+					// 如果到头了
 					log_uart(LOGINFO, "Move forward");
 					lmcmd.type = lm_cmd_pos;
 					lmcmd.pos_speed = lm_cycle_out;
-				} else {
-					if (lmmod.state != lm_state_speed) {
-						log_uart(LOGINFO, "Finding Home");
-						lmcmd.type = lm_cmd_speed;
-						lmcmd.pos_speed = 10000;
-						lmcmd.dir_hard = 1;
-					}
+				} else if (lmmod.state != lm_state_speed) {
+					// 如果没有到头也没有进入匀速寻找模式
+					// 也就是如果运转到了pos但是没有到头
+					log_uart(LOGINFO, "Finding Home");
+					lmcmd.type = lm_cmd_speed;
+					lmcmd.pos_speed = 10000;
+					lmcmd.dir_hard = 1;
 				}
-			} else if (lmmod.state == lm_state_pos && lmmod.pos == lm_cycle_out) {
+			} else if (lmmod.state == lm_state_pos
+					&& lmmod.pos == lm_cycle_out) {
+				// 如果到最外面了
 				log_uart(LOGINFO, "Move back");
 				lmcmd.type = lm_cmd_pos;
 				lmcmd.pos_speed = lm_cycle_in;
 			}
 		}
 
+		// serial read
+		// TODO 其实读取 UART 输入应该做成中断模式的，直接写在循环里面是 Arduino 导致的坏习惯会限制很多
+		// TODO 而且串口要比 CAN 不稳定得多，有可能会漏掉一些字节。
+		// 这些稳定性的确认重发都没有做。
+		cmd_input(count);
+		// can cache read
+		if (lmcan_cached) {
+			lmcmd = lmcan;
+		}
+
+		// detect switch on CN1
+		detect_cn1();
+
+		// 覆盖 lmcmd 的操作都要确保这个指令之后确实用不到，不需要下一个周期重新触发。
+
 		// if cn1 is pressed only stop 1 - FWD - close direction
 		// TODO add pos detection after implementing read pos function
 		if (cn1_indicator) {
 			// cn1 按下的时候重置 home，这个只能在按下期间执行一次
-			// 在 pos 状态下重置 home 会发生惨剧。
-			// 所以如果要解决越来越超内的误差的话，就不要回到0位置。
-			if(!lm_home_set && lmmod.state != lm_state_pos) {
+			// 在 pos 状态下重置 home 会发生惨剧，所以我阻断了pos运动模式里面的误差矫正。
+			// 只有匀速运动的模式里面按下cn1会矫正位置
+			// 所以如果要解决越来越向内的误差的话，就不要回到0位置。
+			if (!lm_home_set && lmmod.state != lm_state_pos) {
 				log_uart(LOGINFO, "Set home");
 				lmcmd.type = lm_cmd_set_home;
 			}
@@ -238,12 +258,11 @@ int main(void) {
 			lm_home_set = 0;
 		}
 
-
 		// 如果过冲进入保护状态那么重置 L6470
 		// TODO
 		/* USER CODE END WHILE */
 		/* USER CODE BEGIN 3 */
-		if(lmcmd.type == lm_cmd_set_home) {
+		if (lmcmd.type == lm_cmd_set_home) {
 			lm_home_set = 1;
 		}
 		lm_commit(&lmcmd, &lmmod);
@@ -504,15 +523,23 @@ void cycle_tick_sleep_to(uint32_t ms) {
 // Read UART input if char is available.
 // LF or CR triggers cmd_run function.
 void cmd_input(int count) {
+	// 这个 While 处理的是在这个 while 内容执行的时候到来的新字符。
+	// 因为UART没有接受缓冲区，所以在不检测时候超过一个的字符都会被丢弃。
+	// 我想这个里面的接受函数长度如果大于一的话只有同步接口的时候有意义，
+	// 就是在HALReceive函数内部的时候又收到了新的字符，不然怎么样也没有用。
 	while (HAL_UART_Receive(&huart1, cmdbuf + cmdlen, 1, 0) == HAL_OK) {
+		// Debug Serial Echo
+		log_uart_raw(cmdbuf + cmdlen, 1);
 		char last = (char) cmdbuf[cmdlen];
 		cmdlen++;
 		if (last == '\n' || last == '\r') {
+			// overwrite last LF / CR char.
+			cmdbuf[--cmdlen] = 0;
 			if (cmdlen > 0) {
-				// overwrite last LF / CR char.
-				cmdbuf[cmdlen - 1] = 0;
-				cmd_parse((char*) cmdbuf);
+				cmd_parse_send((char*) cmdbuf);
 				cmdlen = 0;
+			} else {
+				log_uart_f(LOGDEBUG, "Ignore empty input line.");
 			}
 		} else if (last == '\b' || last == 0x7f) {
 			// BS or DEL char, some terminal may send DEL instead of BS.
@@ -524,92 +551,134 @@ void cmd_input(int count) {
 		// if limit is reached.
 		if (cmdlen >= cmdlim) {
 			cmdbuf[cmdlen] = 0;
-			cmd_parse((char*) cmdbuf);
+			cmd_parse_send((char*) cmdbuf);
 			cmdlen = 0;
 		}
 	}
 }
+
+// command parse functions
+static int cmd_parse_send_1(char* cmd);
+static int cmd_parse_body(char* cmd, struct lm_cmd *store);
 static int read_mr_args(char* cmd, uint32_t* out_speed, uint32_t* out_dir);
 static HAL_StatusTypeDef can_send_feedback(HAL_StatusTypeDef send_res);
 
 /* Command format is:
- * [#<id> ](mr|ms|mp|mreset|mhome|mcycle)[ <args>]
+ * [sig ][#<id> ](mr|ms|mp|mreset|mhome|mcycle)[ <args>]
  */
-uint32_t my_cmdid = 123;
-void cmd_parse(char* cmd) {
+void cmd_parse_send(char* cmd) {
 	log_uart_f(LOGDEBUG, "Run: %s\n", cmd);
 
+	// if need signal feedback
+	int sigon = 0;
+	if(strncmp(cmd, "sig ", 4) == 0) {
+		sigon = 1;
+		cmd += 4;
+	}
+
+	int res = cmd_parse_send_1(cmd);
+	if(sigon) {
+		if(res == 0)
+			log_uart_raw((uint8_t*)"<OK>\r\n", 5);
+		else
+			log_uart_raw((uint8_t*)"<FAIL>\r\n", 7);
+	}
+}
+
+// 0 for good, 1 for bad
+static int cmd_parse_send_1(char* cmd) {
 	// if command has an id
-	uint32_t cmdid = 0;
+	uint16_t cmdid = 0;
 	if (cmd[0] == '#') {
 		size_t scanlen;
-		if (sscanf(cmd + 1, "%lu%n ", &cmdid, &scanlen) != 1) {
+		if (sscanf(++cmd, "%hu%n ", &cmdid, &scanlen) != 1 || cmdid > 255) {
 			log_uart(LOGERROR, "Cmd id read error.");
-			return;
+			return 1;
 		}
 		cmd += scanlen + 1;
 	}
 
+
 	// parse command body
-	if (cmd[0] == 'm') {
-		if (strncmp(cmd + 1, "cycle", 5) == 0) {
-			lm_cycle = !lm_cycle;
-			if(lm_cycle) {
-				// kickstart
-				lmcmd.type = lm_cmd_pos;
-				lmcmd.pos_speed = lm_cycle_in;
-			}
-		} else {
-			if(lm_cycle) {
-				log_uart_f(LOGINFO, "Cycle off.");
-				lm_cycle = 0;
-			}
-			if (strncmp(cmd + 1, "home", 4) == 0) {
-				lmcmd.type = lm_cmd_set_home;
-			} else if (strncmp(cmd + 1, "reset", 5) == 0) {
-				lmcmd.type = lm_cmd_reset;
-			} else if (cmd[1] == 'r') {
-				uint32_t pos, dir;
-				if (read_mr_args(cmd + 3, &pos, &dir) != 2) {
-					log_uart(LOGERROR, "Read mr command failed.");
-					return;
-				}
-				lmcmd.pos_speed = pos;
-				lmcmd.dir_hard = dir;
-				lmcmd.type = lm_cmd_speed;
-			} else if (cmd[1] == 's') {
-				lmcmd.type = lm_cmd_stop;
-			} else if (cmd[1] == 'p') {
-				if (sscanf(cmd + 3, "%ld", &(lmcmd.pos_speed)) != 1) {
-					log_uart(LOGERROR, "Read mp command failed.");
-					return;
-				}
-				lmcmd.type = lm_cmd_pos;
-			} else {
-				log_uart(LOGERROR, "Command parse failed");
-				return;
-			}
-		}
-	} else {
-		log_uart(LOGERROR, "Command parse failed");
-		return;
+	if (cmd_parse_body(cmd, &lmparse) != 0) {
+		return 1;
 	}
 
 	// check local or CAN
-	if (cmdid == 0 || cmdid == my_cmdid) {
+	// TODO CAN 传输的深反射需要做吗？
+	if (cmdid == 0 || cmdid == machine_id) {
+		lmcmd = lmparse; // copy parse cache to local command cache
+		return 0;
 	} else {
 		uint8_t msg[8];
-		uint32_t pos = lmcmd.pos_speed;
+		uint32_t pos = lmparse.pos_speed;
 		msg[0] = CAN_CMD_VER;
 		msg[1] = CAN_CMD_LM;
-		msg[2] = (uint8_t) (lmcmd.type);
-		msg[3] = (uint8_t) (pos >> 24);
+		msg[2] = (uint8_t)cmdid;
+		msg[3] = (uint8_t) (lmparse.type);
 		msg[4] = (uint8_t) (pos >> 16);
 		msg[5] = (uint8_t) (pos >> 8);
 		msg[6] = (uint8_t) (pos);
-		msg[7] = (uint8_t) (lmcmd.dir_hard);
-		can_send_feedback(can_msg_add(msg, 8));
+		msg[7] = (uint8_t) (lmparse.dir_hard);
+		return can_send_feedback(can_msg_add(msg, 8)) != HAL_OK;
 	}
+}
+
+static int cmd_parse_body(char* cmd, struct lm_cmd *store) {
+	// clear storage preventing trash data from previous parse
+	// 之前完全想不到会有这样的bug，会有这种缓存拷贝给主存，主存做了正确的状态更新但是缓存没有导致的问题，
+	memset(store, 0, sizeof(struct lm_cmd));
+	// any input will turn off motor cycle test
+	if (lm_cycle) {
+		log_uart_f(LOGINFO, "Cycle off.");
+		lm_cycle = 0;
+	}
+	if (cmd[0] == 'm') {
+		if (strncmp(cmd + 1, "cycle", 5) == 0) {
+			lm_cycle = !lm_cycle;
+			if (lm_cycle) {
+				// kickstart
+				store->type = lm_cmd_pos;
+				store->pos_speed = lm_cycle_in;
+			}
+		} else if (strncmp(cmd + 1, "home", 4) == 0) {
+			store->type = lm_cmd_set_home;
+		} else if (strncmp(cmd + 1, "reset", 5) == 0) {
+			store->type = lm_cmd_reset;
+		} else if (strncmp(cmd + 1, "id ", 3) == 0) {
+			uint16_t id;
+			if(sscanf(cmd + 4, "%hu", &id) == 1 && id < 256) {
+				machine_id = id;
+			} else {
+				log_uart(LOGERROR, "Read Machine Id Error, should between 0 and 255.");
+				return 1;
+			}
+		} else if (cmd[1] == 'r') {
+			uint32_t pos, dir;
+			if (read_mr_args(cmd + 3, &pos, &dir) != 2) {
+				log_uart(LOGERROR, "Read mr command failed.");
+				return 1;
+			}
+			store->pos_speed = pos;
+			store->dir_hard = dir;
+			store->type = lm_cmd_speed;
+		} else if (cmd[1] == 's') {
+			store->type = lm_cmd_stop;
+		} else if (cmd[1] == 'p') {
+			if (sscanf(cmd + 3, "%ld", &(store->pos_speed)) != 1) {
+				log_uart(LOGERROR, "Read mp command failed.");
+				return 1;
+			}
+			store->type = lm_cmd_pos;
+		} else {
+			log_uart(LOGERROR, "Command parse failed");
+			return 1;
+		}
+	} else {
+		log_uart(LOGERROR, "Command parse failed");
+		return 1;
+	}
+	return 0;
 }
 
 static int read_mr_args(char* cmd, uint32_t* out_speed, uint32_t* out_dir) {
@@ -663,23 +732,32 @@ void detect_cn1() {
 	}
 }
 
+// when CAN receives data
 void can_cmd_run(uint8_t* data, uint8_t len) {
-	// no lm_commit here, program will commit on next cycle.
-	if (len >= 2) {
-		uint8_t ver = data[0], cmd = data[1];
-		if (ver > CAN_CMD_VER) {
-			log_uart_f(LOGWARN, "CAN Message Version Higher than me.");
-		}
-		if (cmd == CAN_CMD_LM) {
-			// 按照 cmd_run 里面的编码方法重新组装消息
-			lmcmd.type = data[2];
-			lmcmd.pos_speed = (int32_t) ((data[3] << 24) + (data[4] << 16)
-					+ (data[5] << 8) + (data[6]));
-			lmcmd.dir_hard = data[7];
-		} else if (cmd == CAN_CMD_STRING) {
-			char buf[8] = { 0 };
-			memcpy(buf, data + 2, len - 2);
-			log_uart_f(LOGINFO, "CAN Received: %s", buf);
+	// no lm_commit called here, program will commit on next cycle.
+	// 考虑到中断可能发生在主循环的任何一个地方，这里不要直接更改主循环里面复用的变量。
+	// 这就像多线程一样要注意公共区域修改的时机。
+	if (len >= 3) {
+		uint8_t ver = data[0], cmd = data[1], id = data[2];
+		if(id == machine_id) {
+			if (ver > CAN_CMD_VER) {
+				log_uart_f(LOGERROR, "CAN Message Version Higher than me.");
+				return;
+			}
+			if (cmd == CAN_CMD_LM) {
+				lmcan_cached = 1;
+				// 按照 cmd_run 里面的编码方法重新组装消息
+				lmcan.type = data[3];
+				lmcan.pos_speed = (int32_t) ((data[4] << 16)
+						+ (data[5] << 8) + (data[6]));
+				lmcan.dir_hard = data[7];
+			} else if (cmd == CAN_CMD_STRING) {
+				char buf[8] = { 0 };
+				memcpy(buf, data + 2, len - 2);
+				log_uart_f(LOGINFO, "CAN Received: %s", buf);
+			}
+		} else {
+			log_uart_f(LOGDEBUG, "Ignore CAN Message with other's id #%hu", (uint16_t)id);
 		}
 	} else {
 		log_uart_f(LOGWARN, "CAN Invalid Message: Too Short.");
