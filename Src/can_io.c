@@ -36,6 +36,7 @@ HAL_StatusTypeDef can_msg_add(uint8_t* data, uint8_t len) {
 	}
 	can_tx_header.DLC = len;
 	// 这里的函数直接会读入 header 的数据操作不保存引用，所以可以安全复用不担心 header 数据出错。
+	// 并且这个函数也会直接拷贝走data里面的数据，所以不用担心data是一个局部变量
 	return HAL_CAN_AddTxMessage(&hcan, &can_tx_header, data, &can_tx_mailbox);
 }
 

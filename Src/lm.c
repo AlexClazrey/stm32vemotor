@@ -4,16 +4,80 @@
 #include <string.h>
 
 
+static int lm_commit_cmd(struct lm_cmd *cmd, volatile struct lm_model *model);
+
+void lm_init(struct lm_handle *handle) {
+	memset(handle, 0, sizeof(struct lm_handle));
+}
+
+int lm_hasspace(struct lm_handle *handle) {
+	if(handle == NULL)
+		return 0;
+	return diffu(handle->tail, handle->head, lm_handle_queue_len) > 1;
+}
+
+int lm_append_cmd(struct lm_handle *handle, struct lm_cmd *cmd) {
+	if(lm_hasspace(handle)) {
+		handle->queue[handle->tail] = *cmd;
+		handle->tail = addu(handle->tail, 1, lm_handle_queue_len);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+int lm_append_newcmd(struct lm_handle *handle, enum lm_cmd_type type, int32_t pos_speed, uint8_t dir_hard) {
+	if(lm_hasspace(handle)) {
+		struct lm_cmd *pcmd = handle->queue + handle->tail;
+		pcmd->dir_hard = dir_hard;
+		pcmd->pos_speed = pos_speed;
+		pcmd->type = type;
+		handle->tail = addu(handle->tail, 1, lm_handle_queue_len);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+struct lm_cmd* lm_first(struct lm_handle* handle) {
+	if(handle == NULL)
+		return NULL;
+	if(handle->head >= lm_handle_queue_len) {
+		log_uart_f(LOGERROR, "LM cmd queue head out of range");
+		handle->head = 0;
+		return NULL;
+	}
+	if(handle->head == handle->tail) {
+		return NULL;
+	}
+	return handle->queue + handle->head;
+}
+
+struct lm_cmd* lm_pop(struct lm_handle *handle) {
+	struct lm_cmd* res = lm_first(handle);
+	if(res == NULL) {
+		return NULL;
+	}
+	handle->head = addu(handle->head, 1, lm_handle_queue_len);
+	return res;
+}
+
+int lm_commit(struct lm_handle *handle) {
+	int res = lm_commit_cmd(lm_first(handle), &handle->mod);
+	lm_pop(handle);
+	return res;
+}
+
 /*
- * Return 0 for success, 1 for failed.
+ * Return 1 for success, 0 for failed.
  * */
-int lm_commit(struct lm_cmd *cmd, volatile struct lm_model *model) {
+static int lm_commit_cmd(struct lm_cmd *cmd, volatile struct lm_model *model) {
 	if(cmd == NULL || model == NULL) {
 		log_uart_f(LOGERROR, "LM lm_commit got null pointer.");
-		return 1;
+		return 0;
 	}
 	if(cmd->type == lm_cmd_empty) {
-		return 0;
+		return 1;
 	} else if(cmd->type == lm_cmd_reset) {
 		dSPIN_Reset_Device();
 		log_uart_f(LOGDEBUG, "LM chip reset.");
@@ -51,7 +115,5 @@ int lm_commit(struct lm_cmd *cmd, volatile struct lm_model *model) {
 		model->speed = 0;
 		model->pos = cmd->pos_speed;
 	}
-	memset(cmd, 0, sizeof(struct lm_cmd));
-	cmd->type = lm_cmd_empty;
-	return 0;
+	return 1;
 }

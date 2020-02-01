@@ -36,6 +36,20 @@ struct lm_cmd {
 	uint8_t dir_hard;
 };
 
-int lm_commit(struct lm_cmd *cmd, volatile struct lm_model *model);
+#define lm_handle_queue_len 10
+struct lm_handle {
+	volatile struct lm_model mod;  // 如果做了状态变化的中断反馈的话需要volatile
+	struct lm_cmd queue[lm_handle_queue_len];
+	uint32_t head;
+	uint32_t tail;
+};
+
+void lm_init(struct lm_handle *handle);
+int lm_hasspace(struct lm_handle *handle);
+int lm_append_cmd(struct lm_handle* handle, struct lm_cmd *cmd);
+int lm_append_newcmd(struct lm_handle* handle, enum lm_cmd_type type, int32_t pos_speed, uint8_t dir_hard);
+struct lm_cmd* lm_first(struct lm_handle *handle);
+struct lm_cmd* lm_pop(struct lm_handle *handle);
+int lm_commit(struct lm_handle *handle);
 
 #endif
