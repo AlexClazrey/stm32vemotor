@@ -36,6 +36,6 @@ struct lm_cmd {
 	uint8_t dir_hard;
 };
 
-int lm_commit(struct lm_cmd *cmd, struct lm_model *model);
+int lm_commit(struct lm_cmd *cmd, volatile struct lm_model *model);
 
 #endif

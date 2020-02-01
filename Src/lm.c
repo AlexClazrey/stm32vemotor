@@ -7,7 +7,7 @@
 /*
  * Return 0 for success, 1 for failed.
  * */
-int lm_commit(struct lm_cmd *cmd, struct lm_model *model) {
+int lm_commit(struct lm_cmd *cmd, volatile struct lm_model *model) {
 	if(cmd == NULL || model == NULL) {
 		log_uart_f(LOGERROR, "LM lm_commit got null pointer.");
 		return 1;
@@ -41,6 +41,10 @@ int lm_commit(struct lm_cmd *cmd, struct lm_model *model) {
 		model->speed = cmd->pos_speed;
 		model->dir = cmd->dir_hard;
 	} else if(cmd->type == lm_cmd_pos) {
+		if(L6470_BUSY1()) {
+			dSPIN_Hard_Stop();
+			log_uart_f(LOGDEBUG, "Stop previous movement.");
+		}
 		dSPIN_Go_To(cmd->pos_speed);
 		log_uart_f(LOGDEBUG, "LM pos: %ld", cmd->pos_speed);
 		model->state = lm_state_pos;
