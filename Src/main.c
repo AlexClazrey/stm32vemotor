@@ -242,9 +242,8 @@ int main(void) {
 			count = 0;
 		}
 
-		if(led1_blink) {
-			if((count & 0xff) == 0) { // 256 cycle
-				log_uart(LOGINFO, "LED1 Flip");
+		if (led1_blink) {
+			if ((count & 0xff) == 0) { // 256 cycle
 				led1_flip();
 			}
 		}
@@ -252,10 +251,9 @@ int main(void) {
 		// detect switch on CN1
 		detect_cn1();
 
-
 		// can cache read
 		if (lmcan_cached) {
-			lm_append_cmd(plmh, (struct lm_cmd*)&lmcan);
+			lm_append_cmd(plmh, (struct lm_cmd*) &lmcan);
 			lmcan_cached = 0;
 		}
 
@@ -271,7 +269,7 @@ int main(void) {
 
 		// 覆盖指令的操作都要确保这个指令之后确实用不到，不需要在下个周期重新触发。
 		struct lm_cmd* lcf = lm_first(plmh);
-		if(lcf == NULL) {
+		if (lcf == NULL) {
 			// 如果命令队列是空的话，那么这里制作一个命令。
 			lm_append_newcmd(plmh, lm_cmd_empty, 0, 0);
 			lcf = lm_first(plmh);
@@ -329,13 +327,12 @@ void SystemClock_Config(void) {
 
 	/** Initializes the CPU, AHB and APB busses clocks
 	 */
-	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-	RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-	RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
 	RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+	RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
 	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-	RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL3;
+	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI_DIV2;
+	RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL6;
 	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
 		Error_Handler();
 	}
@@ -350,9 +347,6 @@ void SystemClock_Config(void) {
 	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK) {
 		Error_Handler();
 	}
-	/** Enables the Clock Security System
-	 */
-	HAL_RCC_EnableCSS();
 }
 
 /**
@@ -558,18 +552,18 @@ void cycle_tick_start() {
 	tickstart = HAL_GetTick();
 }
 
+uint32_t cycle_tick_now() {
+	return diffu(tickstart, HAL_GetTick(), UINT32_MAX + 1);
+}
+
 void cycle_tick_sleep_to(uint32_t ms) {
-	uint32_t elapsed = HAL_GetTick() - tickstart;
+	uint32_t elapsed = cycle_tick_now();
 	if (ms < elapsed) {
 		log_uart_f(LOGWARN, "Cycle Time Exceeded, time used: %d, target: %d.", elapsed, ms);
 		return;
 	}
-	while (diffu(tickstart, HAL_GetTick(), UINT32_MAX) < ms)
+	while (cycle_tick_now() < ms)
 		;
-}
-
-uint32_t cycle_tick_now() {
-	return HAL_GetTick() - tickstart;
 }
 
 // ----------- Interrupts
@@ -642,16 +636,16 @@ void inputbuf_read(struct lm_handle* plmh) {
 	// 我也需要log一下处理一条命令需要用多少时间。
 	// copy to cmd buffer and parse
 	//
-	while(cycle_tick_now() < 8) {
-		if(!lm_hasspace(plmh)) {
+	while (cycle_tick_now() < 8) {
+		if (!lm_hasspace(plmh)) {
 			log_uart(LOGWARN, "Stop reading input due to full cmd queue");
 			return;
 		}
-		struct lm_cmd cmd = {0};
+		struct lm_cmd cmd = { 0 };
 		uint8_t receiver = 0;
 		enum inputcmdtype type = inputbuf_read_one_cmd(&cmd, &receiver);
 
-		if(type == input_error) {
+		if (type == input_error) {
 			// Error details was printed in parse function
 			input_feedback(false);
 		} else if (type == input_empty) {
@@ -679,33 +673,33 @@ void inputbuf_read(struct lm_handle* plmh) {
 enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_receiver) {
 	uint32_t cursor = inputstart;
 	int triggered = 0;
-	while(cursor != (uint32_t)inputend) {
+	while (cursor != (uint32_t) inputend) {
 		// check char here
 		char ch = inputbuf[cursor];
-		if(ch == '\0' || ch == '\r' || ch == '\n') {
+		if (ch == '\0' || ch == '\r' || ch == '\n') {
 			triggered = 1;
 			break;
 		}
 		cursor++;
-		if(cursor == serial_buffer_size) {
+		if (cursor == serial_buffer_size) {
 			cursor = 0;
 		}
 	}
-	if(!triggered) {
+	if (!triggered) {
 		return input_empty;
 	}
 
-	if(cursor == (uint32_t)inputstart) {
+	if (cursor == (uint32_t) inputstart) {
 		log_uart_f(LOGDEBUG, "Yet another line ending.");
 		inputstart = addu(cursor, 1, serial_buffer_size);
 		return input_next; // 现在如果 \r\n 就会触发一次 next
 	}
 
-	int res = cmd_copy(cmdbuf, (char*)inputbuf, inputstart, cursor, serial_buffer_size, cmd_length_limit);
+	int res = cmd_copy(cmdbuf, (char*) inputbuf, inputstart, cursor, serial_buffer_size, cmd_length_limit);
 	// 这个时候cursor指向的是 \r\n\0 不可能是 inputend 所以要再加一
 	inputstart = addu(cursor, 1, serial_buffer_size);
 
-	if(res) {
+	if (res) {
 		return cmd_parse(cmdbuf, out_pcmd, out_receiver);
 	} else {
 		return input_error;
@@ -713,7 +707,7 @@ enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_re
 }
 
 void input_feedback(int success) {
-	if(success) {
+	if (success) {
 		log_uart_raw((uint8_t*) "<OK>\r\n", 6);
 	} else {
 		log_uart_raw((uint8_t*) "<FAIL>\r\n", 8);
@@ -728,7 +722,6 @@ HAL_StatusTypeDef can_send_log(HAL_StatusTypeDef send_res) {
 	}
 	return send_res;
 }
-
 
 // --------- Command
 int cmd_parse_body(char* cmd, struct lm_cmd *store);
@@ -752,12 +745,12 @@ int cmd_copy(char* dest, char* buf, int start, int end, int bufsize, int cmdsize
 }
 
 enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_receiver) {
-	uint16_t receiver = (uint16_t)-1;
+	uint16_t receiver = (uint16_t) -1;
 
 	log_uart_f(LOGDEBUG, "Parse: %s", cmd);
 
 	// 为了兼容之前的格式
-	if(strncmp(cmd, "sig ", 4) == 0) {
+	if (strncmp(cmd, "sig ", 4) == 0) {
 		cmd += 4;
 	}
 
@@ -768,7 +761,7 @@ enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_re
 			log_uart(LOGERROR, "Cmd id read error.");
 			return 1;
 		}
-		*out_receiver = (uint8_t)receiver;
+		*out_receiver = (uint8_t) receiver;
 		if (cmd[scanlen] == ' ') {
 			// 兼容ID后面有或者没有空格两种情况
 			cmd++;
@@ -779,12 +772,12 @@ enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_re
 	// parse command body
 	int res = cmd_parse_body(cmd, out_store);
 
-	if(res == 1) {
+	if (res == 1) {
 		return input_error;
-	} else if(res == 2) {
+	} else if (res == 2) {
 		return input_settings;
 	} else if (res == 0) {
-		if(receiver == machine_id || receiver == (uint16_t)-1) {
+		if (receiver == machine_id || receiver == (uint16_t) -1) {
 			return input_lmcmd;
 		} else {
 			return input_can;
@@ -893,7 +886,6 @@ int read_mr_args(char* cmd, uint32_t* out_speed, uint32_t* out_dir) {
 	return 2;
 }
 
-
 // ----------
 // 设置电机循环测试的时候使用的命令。
 void mcycle_append_cmd(struct lm_handle *plmh, uint32_t count) {
@@ -989,7 +981,7 @@ void can_cmd_run(uint8_t* data, uint8_t len) {
 				return;
 			}
 			if (cmd == CAN_CMD_LM) {
-				if(lmcan_cached) {
+				if (lmcan_cached) {
 					log_uart_f(LOGWARN, "CAN Ignored: previous command is still cached.");
 					return;
 				}

@@ -1,4 +1,5 @@
 #include "lm.h"
+#include "util.h"
 #include "./DSpin/dspin.h"
 #include "log_uart.h"
 #include <string.h>
