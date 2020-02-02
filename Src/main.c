@@ -90,9 +90,18 @@ const uint8_t CAN_CMD_STRING = 10;
 const uint32_t COUNT_INTV = 10; // 每次主循环使用的毫秒数
 const uint32_t COUNT_LIMIT = 1000; // COUNT_LIMIT * COUNT_INTV / 1000 得到一个大循环使用的秒数，现在是100s。
 
+// LED
+#define LED1_GPIO GPIOA
+#define LED1_GPIO_PIN GPIO_PIN_8
+#define LED2_GPIO GPIOC
+#define LED2_GPIO_PIN GPIO_PIN_9
+
 /* 以上是设置项目 Configurations End */
 
 /* program variables */
+
+// led1
+int led1_blink = 0;
 
 // cn1 press
 int cn1_indicator = 0;
@@ -136,10 +145,10 @@ void mcycle_append_cmd(struct lm_handle* plmh, uint32_t count);
 void cycle_tick_start();
 void cycle_tick_sleep_to(uint32_t ms);
 uint32_t cycle_tick_now();
-void inputbuf_read();
-void cmd_cache_read();
+void inputbuf_read(struct lm_handle* plmh);
 void detect_cn1();
 void can_cmd_run(uint8_t* data, uint8_t len);
+void led1_flip();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -190,9 +199,7 @@ int main(void) {
 	log_uart(LOGDEBUG, "Start initializing.");
 	log_uart(LOGDEBUG, "Moving to initial position.");
 	lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
-	if (lm_commit(plmh) != 0) {
-		log_uart(LOGERROR, "Reset position failed.");
-	} else {
+	if (lm_commit(plmh)) {
 		uint32_t init_tick = HAL_GetTick();
 		while (1) {
 			detect_cn1();
@@ -206,6 +213,8 @@ int main(void) {
 				break;
 			}
 		}
+	} else {
+		log_uart(LOGERROR, "Reset position failed.");
 	}
 	log_uart(LOGDEBUG, "Initialize finished.");
 
@@ -233,6 +242,13 @@ int main(void) {
 			count = 0;
 		}
 
+		if(led1_blink) {
+			if((count & 0xff) == 0) { // 256 cycle
+				log_uart(LOGINFO, "LED1 Flip");
+				led1_flip();
+			}
+		}
+
 		// detect switch on CN1
 		detect_cn1();
 
@@ -244,7 +260,7 @@ int main(void) {
 		}
 
 		// read input buffer
-		inputbuf_read();
+		inputbuf_read(plmh);
 
 		// cycle test 放在输入的位置后面
 		if (lm_cycle) {
@@ -548,7 +564,7 @@ void cycle_tick_sleep_to(uint32_t ms) {
 		log_uart_f(LOGWARN, "Cycle Time Exceeded, time used: %d, target: %d.", elapsed, ms);
 		return;
 	}
-	while (diffu(HAL_GetTick(), tickstart, UINT32_MAX) < ms)
+	while (diffu(tickstart, HAL_GetTick(), UINT32_MAX) < ms)
 		;
 }
 
@@ -604,15 +620,16 @@ HAL_StatusTypeDef can_cmd_send(struct lm_cmd* cmd, uint8_t receiver_id);
 HAL_StatusTypeDef can_send_log(HAL_StatusTypeDef send_res);
 
 enum inputcmdtype {
-	input_error,
-	input_empty,
-	input_lmcmd,
-	input_settings,
-	input_can,
+	input_error, // 输入出错时候的信号
+	input_empty, // 没有输入到行尾的时候的返回信号
+	input_next,  // 连续两个行尾，比如说输入了一个空行的时候的信号
+	input_lmcmd, // 输入了一个本机的电机命令时候的信号
+	input_settings, // 输入了一个本机设置命令时候的信号
+	input_can, // 输入了CAN命令时候的信号。
 };
 
 void inputbuf_read(struct lm_handle* plmh) {
-	// 这个函数试把解析InputBuffer的工作移动到主循环里面。
+	// 这个函数试把解析InputBuffer的工作移动到主循环里面，这样可以面对大批量的命令汇入
 	// 首先先向后寻找\r\n或者\0的位置，复制到cmdbuf里面，然后清理cmdbuf，然后解析。
 	// 为了能在一次主循环里面处理多条命令。
 	// 需要创建不止一个命令缓存而是很多个命令缓存池
@@ -626,7 +643,7 @@ void inputbuf_read(struct lm_handle* plmh) {
 	// copy to cmd buffer and parse
 	//
 	while(cycle_tick_now() < 8) {
-		if(lm_hasspace(plmh)) {
+		if(!lm_hasspace(plmh)) {
 			log_uart(LOGWARN, "Stop reading input due to full cmd queue");
 			return;
 		}
@@ -638,7 +655,8 @@ void inputbuf_read(struct lm_handle* plmh) {
 			// Error details was printed in parse function
 			input_feedback(false);
 		} else if (type == input_empty) {
-			log_uart(LOGWARN, "Empty command found");
+			// 读到empty表示输入缓冲区已经读完了。
+			break;
 		} else if (type == input_lmcmd) {
 			// 如果是本机的命令，那么加入cmd queue。
 			lm_append_cmd(plmh, &cmd);
@@ -649,6 +667,8 @@ void inputbuf_read(struct lm_handle* plmh) {
 			HAL_StatusTypeDef hs = can_cmd_send(&cmd, receiver);
 			can_send_log(hs);
 			input_feedback(hs == HAL_OK);
+		} else if (type == input_next) {
+			// do nothing here
 		} else {
 			log_uart(LOGERROR, "Unknown error [01]");
 		}
@@ -658,10 +678,12 @@ void inputbuf_read(struct lm_handle* plmh) {
 
 enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_receiver) {
 	uint32_t cursor = inputstart;
+	int triggered = 0;
 	while(cursor != (uint32_t)inputend) {
 		// check char here
 		char ch = inputbuf[cursor];
 		if(ch == '\0' || ch == '\r' || ch == '\n') {
+			triggered = 1;
 			break;
 		}
 		cursor++;
@@ -669,12 +691,18 @@ enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_re
 			cursor = 0;
 		}
 	}
+	if(!triggered) {
+		return input_empty;
+	}
 
 	if(cursor == (uint32_t)inputstart) {
-		return input_empty; // 现在如果 \r\n 就会触发一次 empty
+		log_uart_f(LOGDEBUG, "Yet another line ending.");
+		inputstart = addu(cursor, 1, serial_buffer_size);
+		return input_next; // 现在如果 \r\n 就会触发一次 next
 	}
 
 	int res = cmd_copy(cmdbuf, (char*)inputbuf, inputstart, cursor, serial_buffer_size, cmd_length_limit);
+	// 这个时候cursor指向的是 \r\n\0 不可能是 inputend 所以要再加一
 	inputstart = addu(cursor, 1, serial_buffer_size);
 
 	if(res) {
@@ -724,7 +752,7 @@ int cmd_copy(char* dest, char* buf, int start, int end, int bufsize, int cmdsize
 }
 
 enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_receiver) {
-	uint16_t receiver = 0;
+	uint16_t receiver = (uint16_t)-1;
 
 	log_uart_f(LOGDEBUG, "Parse: %s", cmd);
 
@@ -756,7 +784,7 @@ enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_re
 	} else if(res == 2) {
 		return input_settings;
 	} else if (res == 0) {
-		if(receiver == machine_id) {
+		if(receiver == machine_id || receiver == (uint16_t)-1) {
 			return input_lmcmd;
 		} else {
 			return input_can;
@@ -982,6 +1010,11 @@ void can_cmd_run(uint8_t* data, uint8_t len) {
 		log_uart_f(LOGWARN, "CAN Invalid Message: Too Short.");
 	}
 }
+
+// LED
+void led1_flip() {
+	LED1_GPIO->ODR ^= LED1_GPIO_PIN;
+}
 /* USER CODE END 4 */
 
 /**
@@ -991,7 +1024,8 @@ void can_cmd_run(uint8_t* data, uint8_t len) {
 void Error_Handler(void) {
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
-
+	led1_blink = 1;
+	led1_flip();
 	/* USER CODE END Error_Handler_Debug */
 }
 
