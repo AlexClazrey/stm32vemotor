@@ -218,7 +218,11 @@ int main(void) {
 	}
 	log_uart(LOGDEBUG, "Initialize finished.");
 
+	// turn off LED2 after init
+	LED2_GPIO->ODR |= LED2_GPIO_PIN;
+
 	log_uart(LOGDEBUG, "Start listening.");
+
 
 	// 开中断，这一段参照 xxxxhal_uart.c 里面的说明
 	// 这个要配合自动生成的 HAL_NVIC_EnableIRQ 一起用才有效果
@@ -243,7 +247,7 @@ int main(void) {
 		}
 
 		if (led1_blink) {
-			if ((count & 0xff) == 0) { // 256 cycle
+			if ((count & 0x3f) == 0) { // 64 cycle
 				led1_flip();
 			}
 		}
