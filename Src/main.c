@@ -55,6 +55,8 @@ SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
+DMA_HandleTypeDef hdma_usart1_rx;
+DMA_HandleTypeDef hdma_usart1_tx;
 
 /* USER CODE BEGIN PV */
 
@@ -136,6 +138,7 @@ uint32_t tickstart = 0;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_CAN_Init(void);
@@ -183,13 +186,14 @@ int main(void) {
 
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
+	MX_DMA_Init();
 	MX_SPI1_Init();
 	MX_USART1_UART_Init();
 	MX_CAN_Init();
 	MX_USART2_UART_Init();
 	/* USER CODE BEGIN 2 */
 	L6470_Configuration1();
-	log_set_port(&huart1);
+	log_init(&huart1, LOGDIRECT);
 	can_init();
 	can_set_listener(can_cmd_run);
 	lm_init(plmh);
@@ -486,6 +490,24 @@ static void MX_USART2_UART_Init(void) {
 
 }
 
+/** 
+ * Enable DMA controller clock
+ */
+static void MX_DMA_Init(void) {
+
+	/* DMA controller clock enable */
+	__HAL_RCC_DMA1_CLK_ENABLE();
+
+	/* DMA interrupt init */
+	/* DMA1_Channel4_IRQn interrupt configuration */
+	HAL_NVIC_SetPriority(DMA1_Channel4_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(DMA1_Channel4_IRQn);
+	/* DMA1_Channel5_IRQn interrupt configuration */
+	HAL_NVIC_SetPriority(DMA1_Channel5_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(DMA1_Channel5_IRQn);
+
+}
+
 /**
  * @brief GPIO Initialization Function
  * @param None
@@ -495,21 +517,18 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
 
 	/* GPIO Ports Clock Enable */
-	__HAL_RCC_GPIOC_CLK_ENABLE()
-	;
-	__HAL_RCC_GPIOA_CLK_ENABLE()
-	;
-	__HAL_RCC_GPIOB_CLK_ENABLE()
-	;
+	__HAL_RCC_GPIOC_CLK_ENABLE();
+	__HAL_RCC_GPIOA_CLK_ENABLE();
+	__HAL_RCC_GPIOB_CLK_ENABLE();
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4 | GPIO_PIN_8, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOA, L6470CS_Pin | GPIO_PIN_8, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_RESET);
 
-	/*Configure GPIO pins : PC1 PC2 */
-	GPIO_InitStruct.Pin = GPIO_PIN_1 | GPIO_PIN_2;
+	/*Configure GPIO pins : L6470Flag_Pin L6470Busy_Pin */
+	GPIO_InitStruct.Pin = L6470Flag_Pin | L6470Busy_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
 	GPIO_InitStruct.Pull = GPIO_PULLUP;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
@@ -520,8 +539,8 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(SW2_GPIO_Port, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : PA4 PA8 */
-	GPIO_InitStruct.Pin = GPIO_PIN_4 | GPIO_PIN_8;
+	/*Configure GPIO pins : L6470CS_Pin PA8 */
+	GPIO_InitStruct.Pin = L6470CS_Pin | GPIO_PIN_8;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -563,7 +582,7 @@ uint32_t cycle_tick_now() {
 void cycle_tick_sleep_to(uint32_t ms) {
 	uint32_t elapsed = cycle_tick_now();
 	if (ms < elapsed) {
-		log_uart_f(LOGWARN, "Cycle Time Exceeded, time used: %d, target: %d.", elapsed, ms);
+		log_uartf(LOGWARN, "Cycle Time Exceeded, time used: %d, target: %d.", elapsed, ms);
 		return;
 	}
 	while (cycle_tick_now() < ms)
@@ -571,41 +590,48 @@ void cycle_tick_sleep_to(uint32_t ms) {
 }
 
 // ----------- Interrupts
+void input_buffer_put(uint8_t data);
+
 // Interrupt Routine For Serial Input
 volatile uint32_t hole;
 void cmd_serial_int(UART_HandleTypeDef *huart) {
 	// check error
 	uint32_t isr = huart->Instance->SR;
 	uint32_t error = (isr & (uint32_t) (USART_SR_PE | USART_SR_FE | USART_SR_ORE | USART_SR_NE));
-	char last;
 	if (error) {
-		// 异常发生的时候，要不就是因为垃圾数据，要不就是因为在处理读入的时候收到了下一位数据，
-		// 两种情况都应该抛弃数据
-		hole = huart->Instance->DR;
+		if (error & USART_SR_ORE) {
+			// if ORE, still append it to buffer
+			input_buffer_put(huart->Instance->DR);
+		} else {
+			// clear error bit
+			hole = huart->Instance->DR;
+		}
 	}
 	if (isr & (uint32_t) USART_SR_RXNE) {
-		if (inputend == inputstart - 1 || (inputend == serial_buffer_size - 1 && inputstart == 0)) {
-			// if buffer full, drop data
-			hole = huart->Instance->DR;
-		} else {
-			// if buffer still has space
-			inputbuf[inputend++] = last = huart->Instance->DR;
+		input_buffer_put(huart->Instance->DR);
+	}
+}
 
-			if (last == '\b' || last == 0x7f) {
-				// BS or DEL char, some terminal may send DEL instead of BS.
-				inputend -= 2;
-
-				if (inputend == inputstart - 1)
-					inputend = inputstart;
-				else if (inputend < 0)
-					inputend += serial_buffer_size;
-			} else if (last == '\0') {
-				--inputend;
-			}
-
-			if (inputend == serial_buffer_size)
-				inputend = 0;
+void input_buffer_put(uint8_t data) {
+	if (inputend == inputstart - 1 || (inputend == serial_buffer_size - 1 && inputstart == 0)) {
+		// if buffer full, drop data
+		// do nothing here
+	} else {
+		// if buffer still has space
+		char last;
+		inputbuf[inputend++] = last = data;
+		if (last == '\b' || last == 0x7f) {
+			// BS or DEL char, some terminal may send DEL instead of BS.
+			inputend -= 2;
+			if (inputend == inputstart - 1)
+				inputend = inputstart;
+			else if (inputend < 0)
+				inputend += serial_buffer_size;
+		} else if (last == '\0') {
+			--inputend;
 		}
+		if (inputend == serial_buffer_size)
+			inputend = 0;
 	}
 }
 
@@ -694,7 +720,7 @@ enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_re
 	}
 
 	if (cursor == (uint32_t) inputstart) {
-		log_uart_f(LOGDEBUG, "Yet another line ending.");
+		log_uartf(LOGDEBUG, "Yet another line ending.");
 		inputstart = addu(cursor, 1, serial_buffer_size);
 		return input_next; // 现在如果 \r\n 就会触发一次 next
 	}
@@ -712,17 +738,17 @@ enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_re
 
 void input_feedback(int success) {
 	if (success) {
-		log_uart_raw((uint8_t*) "<OK>\r\n", 6);
+		log_uartraw((uint8_t*) "<OK>\r\n", 6);
 	} else {
-		log_uart_raw((uint8_t*) "<FAIL>\r\n", 8);
+		log_uartraw((uint8_t*) "<FAIL>\r\n", 8);
 	}
 }
 
 HAL_StatusTypeDef can_send_log(HAL_StatusTypeDef send_res) {
 	if (send_res == HAL_OK) {
-		log_uart_f(LOGDEBUG, "CAN Sent.");
+		log_uartf(LOGDEBUG, "CAN Sent.");
 	} else {
-		log_uart_f(LOGERROR, "CAN Send failed.");
+		log_uartf(LOGERROR, "CAN Send failed.");
 	}
 	return send_res;
 }
@@ -743,7 +769,7 @@ int cmd_copy(char* dest, char* buf, int start, int end, int bufsize, int cmdsize
 		dest[len] = '\0';
 		return 1;
 	} else {
-		log_uart_f(LOGERROR, "Input longer than cmd length limit.");
+		log_uartf(LOGERROR, "Input longer than cmd length limit.");
 		return 0;
 	}
 }
@@ -751,7 +777,7 @@ int cmd_copy(char* dest, char* buf, int start, int end, int bufsize, int cmdsize
 enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_receiver) {
 	uint16_t receiver = (uint16_t) -1;
 
-	log_uart_f(LOGDEBUG, "Parse: %s", cmd);
+	log_uartf(LOGDEBUG, "Parse: %s", cmd);
 
 	// 为了兼容之前的格式
 	if (strncmp(cmd, "sig ", 4) == 0) {
@@ -787,7 +813,7 @@ enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_re
 			return input_can;
 		}
 	} else {
-		log_uart_f(LOGERROR, "Unknown error [02]");
+		log_uartf(LOGERROR, "Unknown error [02]");
 		return input_error;
 	}
 }
@@ -798,7 +824,7 @@ enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_re
 int cmd_parse_body(char* cmd, struct lm_cmd *store) {
 	// any input will turn off motor cycle test
 	if (lm_cycle) {
-		log_uart_f(LOGINFO, "Cycle off.");
+		log_uartf(LOGINFO, "Cycle off.");
 		lm_cycle = 0;
 	}
 	if (cmd[0] == 'm') {
@@ -878,7 +904,7 @@ int read_mr_args(char* cmd, uint32_t* out_speed, uint32_t* out_dir) {
 		return 0;
 	}
 	if (speed < minsp || speed > maxsp) {
-		log_uart_f(LOGERROR, "Speed not in range: %d, range is %d ~ %d.", speed, minsp, maxsp);
+		log_uartf(LOGERROR, "Speed not in range: %d, range is %d ~ %d.", speed, minsp, maxsp);
 		return 0;
 	}
 	if (dir != 0 && dir != 1) {
@@ -981,12 +1007,12 @@ void can_cmd_run(uint8_t* data, uint8_t len) {
 		uint8_t ver = data[0], cmd = data[1], id = data[2];
 		if (id == machine_id) {
 			if (ver > CAN_CMD_VER) {
-				log_uart_f(LOGERROR, "CAN Message Version Higher than me.");
+				log_uartf(LOGERROR, "CAN Message Version Higher than me.");
 				return;
 			}
 			if (cmd == CAN_CMD_LM) {
 				if (lmcan_cached) {
-					log_uart_f(LOGWARN, "CAN Ignored: previous command is still cached.");
+					log_uartf(LOGWARN, "CAN Ignored: previous command is still cached.");
 					return;
 				}
 				lmcan_cached = 1;
@@ -997,13 +1023,13 @@ void can_cmd_run(uint8_t* data, uint8_t len) {
 			} else if (cmd == CAN_CMD_STRING) {
 				char buf[8] = { 0 };
 				memcpy(buf, data + 2, len - 2);
-				log_uart_f(LOGINFO, "CAN Received: %s", buf);
+				log_uartf(LOGINFO, "CAN Received: %s", buf);
 			}
 		} else {
-			log_uart_f(LOGDEBUG, "Ignore CAN Message with other's id #%hu", (uint16_t) id);
+			log_uartf(LOGDEBUG, "Ignore CAN Message with other's id #%hu", (uint16_t) id);
 		}
 	} else {
-		log_uart_f(LOGWARN, "CAN Invalid Message: Too Short.");
+		log_uartf(LOGWARN, "CAN Invalid Message: Too Short.");
 	}
 }
 
@@ -1037,7 +1063,7 @@ void assert_failed(uint8_t *file, uint32_t line) {
 	/* USER CODE BEGIN 6 */
 	/* User can add his own implementation to report the file name and line number,
 	 tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-	log_uart_f(LOGERROR, "Assert failed: %s line %lu.", file, line);
+	log_uartf(LOGERROR, "Assert failed: %s line %lu.", file, line);
 	/* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

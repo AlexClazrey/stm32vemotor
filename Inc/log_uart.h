@@ -9,10 +9,16 @@ enum log_level {
 	LOGERROR,
 };
 
-void log_set_port(UART_HandleTypeDef *huart);
-void log_set_level(enum log_level level);
+enum log_method {
+	LOGDIRECT,
+	LOGDMA,
+};
+
+void log_init(UART_HandleTypeDef *uart, enum log_method method);
+void log_setport(UART_HandleTypeDef *huart);
+void log_setlevel(enum log_level level);
 int log_uart(enum log_level level, char* cstr);
-int log_uart_raw(uint8_t* data, uint16_t len);
-int log_uart_f(enum log_level level, const char* format, ...);
+HAL_StatusTypeDef log_uartraw(uint8_t* data, uint16_t len);
+int log_uartf(enum log_level level, const char* format, ...);
 
 #endif

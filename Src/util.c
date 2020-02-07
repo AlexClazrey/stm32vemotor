@@ -16,7 +16,7 @@ uint32_t addu(uint32_t a1, uint32_t a2, uint32_t overval) {
 	return res >= overval ? res - overval : res;
 }
 
-// Empty Ascending FIFO/Cycle Array
+// Empty Ascending FIFO/Circular Array
 int cycarrcpy(char* dest, char* buf, int start, int end, int bufsize, int cpylimit) {
 	if(start >= bufsize || end >= bufsize) {
 		return -1;

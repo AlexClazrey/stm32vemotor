@@ -58,9 +58,19 @@ void cmd_serial_int(UART_HandleTypeDef *huart);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define L6470Flag_Pin GPIO_PIN_1
+#define L6470Flag_GPIO_Port GPIOC
+#define L6470Busy_Pin GPIO_PIN_2
+#define L6470Busy_GPIO_Port GPIOC
 #define SW2_Pin GPIO_PIN_1
 #define SW2_GPIO_Port GPIOA
 #define SW2_EXTI_IRQn EXTI1_IRQn
+#define WifiTX_Pin GPIO_PIN_2
+#define WifiTX_GPIO_Port GPIOA
+#define WifiRx_Pin GPIO_PIN_3
+#define WifiRx_GPIO_Port GPIOA
+#define L6470CS_Pin GPIO_PIN_4
+#define L6470CS_GPIO_Port GPIOA
 #define CN1_Pin GPIO_PIN_6
 #define CN1_GPIO_Port GPIOC
 /* USER CODE BEGIN Private defines */
