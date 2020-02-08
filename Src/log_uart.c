@@ -12,9 +12,8 @@
  * The default method is direct transmit. You can change it by log_init().
  * You need to set up Pins and/or DMA channel first. You may use STM32 CubeMX.
  *
- * Init function log_init() has three parameters, UART Port, Enum log_method
- * and DMA Handle which can be null if you use direct mode.
- * If you use DMA transmit, log_dma_txcplt_callback() needs to be placed in HAL_UART_TxCpltCallback().
+ * Init function log_init() has two parameters, UART Port, Enum log_method.
+ * If you use DMA transmit, log_dma_txcplt_callback() must be called in HAL_UART_TxCpltCallback().
  * Because multiple log requests may be fired when sending a log message via USART which is a slow process,
  * once previous sending is complete, this callback function will start to send the next message in queue.
  *
@@ -112,7 +111,7 @@ int log_uartraw(char *data, uint16_t len) {
 			int cpyres = arrtocycarr(logbuf, oldend, newend, LOG_TOTAL_BUF_SIZE, data, len);
 			// 这里发送前不作是不是已经填充内容的检验了不然会很复杂。
 			// 假设Copy的速度总是比发送的速度快，只要不要在Copy的过程里面中断太长时间就可以。
-			// 原理是因为如果在没有Copy完的地方有中断，预先请求了DMA指令，
+			// 原理是因为如果在没有Copy完的地方有中断，中断里面先请求了DMA指令，
 			// 只要那个中断里面没有断点卡时间，那么发送UART的速度并不快，那个中断回来之后这里可以很快复制好。
 			// 从而这一段耗时的部分不需要放在lock里面。
 

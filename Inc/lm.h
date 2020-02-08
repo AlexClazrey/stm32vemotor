@@ -1,5 +1,5 @@
-#ifndef __L6M_H__
-#define __L6M_H__
+#ifndef __L6470M_H__
+#define __L6470M_H__
 
 #include "stm32f1xx.h"
 
