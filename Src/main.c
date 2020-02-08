@@ -102,8 +102,9 @@ const uint32_t COUNT_LIMIT = 1000; // COUNT_LIMIT * COUNT_INTV / 1000 得到一�
 
 /* program variables */
 
-// led1
+// led
 int led1_blink = 0;
+int led2_blink = 0;
 
 // cn1 press
 int cn1_indicator = 0;
@@ -130,6 +131,10 @@ volatile int inputend = 0;
 // cmd parse buffer
 char cmdbuf[cmd_length_limit + 1] = { 0 };
 
+// can buffer
+char canbuf[8] = { 0 };
+volatile int canlen = 0;
+
 // tick value when a main cycle starts
 uint32_t tickstart = 0;
 
@@ -144,14 +149,16 @@ static void MX_USART1_UART_Init(void);
 static void MX_CAN_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-void mcycle_append_cmd(struct lm_handle* plmh, uint32_t count);
+void mcycle_append_cmd(struct lm_handle *plmh, uint32_t count);
 void cycle_tick_start();
 void cycle_tick_sleep_to(uint32_t ms);
 uint32_t cycle_tick_now();
-void inputbuf_read(struct lm_handle* plmh);
+void inputbuf_read(struct lm_handle *plmh);
 void detect_cn1();
-void can_cmd_run(uint8_t* data, uint8_t len);
+void can_rx_int(uint8_t *data, uint8_t len);
 void led1_flip();
+void led2_flip();
+void canbuf_read();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -192,11 +199,12 @@ int main(void) {
 	MX_CAN_Init();
 	MX_USART2_UART_Init();
 	/* USER CODE BEGIN 2 */
+	log_init(&huart1, LOGDMA);
+	// motor init
 	L6470_Configuration1();
-	log_init(&huart1, LOGDIRECT);
-	can_init();
-	can_set_listener(can_cmd_run);
 	lm_init(plmh);
+	can_init();
+	can_set_listener(can_rx_int);
 
 	// 初始化的过程
 	// 目前有向内移动直到 CN1 被按下这一步。
@@ -227,15 +235,15 @@ int main(void) {
 
 	log_uart(LOGDEBUG, "Start listening.");
 
-
-	// 开中断，这一段参照 xxxxhal_uart.c 里面的说明
-	// 这个要配合自动生成的 HAL_NVIC_EnableIRQ 一起用才有效果
-	/* Enable the UART Data Register not empty Interrupt */
-	__HAL_UART_ENABLE_IT(&huart1, UART_IT_RXNE);
+	// input init
+	/* Enable IDLE Interrupt with DMA circular reading */
+	__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
 	/* Enable the UART Parity Error Interrupt */
 	__HAL_UART_ENABLE_IT(&huart1, UART_IT_PE);
 	/* Enable the UART Error Interrupt: (Frame error, noise error, overrun error) */
 	__HAL_UART_ENABLE_IT(&huart1, UART_IT_ERR);
+
+	HAL_UART_Receive_DMA(&huart1, inputbuf, serial_buffer_size);
 
 	/* USER CODE END 2 */
 
@@ -255,11 +263,17 @@ int main(void) {
 				led1_flip();
 			}
 		}
+		if (led2_blink) {
+			if ((count & 0x2f) == 0) {
+				led2_flip();
+			}
+		}
 
 		// detect switch on CN1
 		detect_cn1();
 
 		// can cache read
+		canbuf_read();
 		if (lmcan_cached) {
 			lm_append_cmd(plmh, (struct lm_cmd*) &lmcan);
 			lmcan_cached = 0;
@@ -276,7 +290,7 @@ int main(void) {
 		}
 
 		// 覆盖指令的操作都要确保这个指令之后确实用不到，不需要在下个周期重新触发。
-		struct lm_cmd* lcf = lm_first(plmh);
+		struct lm_cmd *lcf = lm_first(plmh);
 		if (lcf == NULL) {
 			// 如果命令队列是空的话，那么这里制作一个命令。
 			lm_append_newcmd(plmh, lm_cmd_empty, 0, 0);
@@ -590,57 +604,35 @@ void cycle_tick_sleep_to(uint32_t ms) {
 }
 
 // ----------- Interrupts
-void input_buffer_put(uint8_t data);
-
-// Interrupt Routine For Serial Input
-volatile uint32_t hole;
-void cmd_serial_int(UART_HandleTypeDef *huart) {
-	// check error
-	uint32_t isr = huart->Instance->SR;
-	uint32_t error = (isr & (uint32_t) (USART_SR_PE | USART_SR_FE | USART_SR_ORE | USART_SR_NE));
-	if (error) {
-		if (error & USART_SR_ORE) {
-			// if ORE, still append it to buffer
-			input_buffer_put(huart->Instance->DR);
-		} else {
-			// clear error bit
-			hole = huart->Instance->DR;
-		}
-	}
-	if (isr & (uint32_t) USART_SR_RXNE) {
-		input_buffer_put(huart->Instance->DR);
-	}
+// DMA Signals
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+	log_dma_txcplt_callback();
+}
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 }
 
-void input_buffer_put(uint8_t data) {
-	if (inputend == inputstart - 1 || (inputend == serial_buffer_size - 1 && inputstart == 0)) {
-		// if buffer full, drop data
-		// do nothing here
-	} else {
-		// if buffer still has space
-		char last;
-		inputbuf[inputend++] = last = data;
-		if (last == '\b' || last == 0x7f) {
-			// BS or DEL char, some terminal may send DEL instead of BS.
-			inputend -= 2;
-			if (inputend == inputstart - 1)
-				inputend = inputstart;
-			else if (inputend < 0)
-				inputend += serial_buffer_size;
-		} else if (last == '\0') {
-			--inputend;
-		}
-		if (inputend == serial_buffer_size)
-			inputend = 0;
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+	led2_blink = 1;
+}
+
+// Interrupt Routine For Serial IDLE
+void cmd_serial_int(UART_HandleTypeDef *huart) {
+	// error was handled by HAL, only check IDLE here.
+	if (__HAL_UART_GET_FLAG(huart, USART_SR_IDLE)) {
+		__HAL_UART_CLEAR_FLAG(huart, USART_SR_IDLE);
+		HAL_UART_DMAPause(huart);
+		uint32_t dmacnt = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
+		inputend = serial_buffer_size - dmacnt;
+		HAL_UART_DMAResume(huart);
 	}
 }
 
 // ------------- Input Buffer Process
 void input_feedback(int success);
 enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_receiver);
-int cmd_copy(char* dest, char* buf, int start, int end, int bufsize, int cmdsize);
-enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_recevier);
-HAL_StatusTypeDef can_cmd_send(struct lm_cmd* cmd, uint8_t receiver_id);
+int cmd_copy(char *dest, char *buf, int start, int end, int bufsize, int cmdsize);
+enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t *out_recevier);
+HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id);
 HAL_StatusTypeDef can_send_log(HAL_StatusTypeDef send_res);
 
 enum inputcmdtype {
@@ -652,7 +644,7 @@ enum inputcmdtype {
 	input_can, // 输入了CAN命令时候的信号。
 };
 
-void inputbuf_read(struct lm_handle* plmh) {
+void inputbuf_read(struct lm_handle *plmh) {
 	// 这个函数试把解析InputBuffer的工作移动到主循环里面，这样可以面对大批量的命令汇入
 	// 首先先向后寻找\r\n或者\0的位置，复制到cmdbuf里面，然后清理cmdbuf，然后解析。
 	// 为了能在一次主循环里面处理多条命令。
@@ -738,9 +730,9 @@ enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_re
 
 void input_feedback(int success) {
 	if (success) {
-		log_uartraw((uint8_t*) "<OK>\r\n", 6);
+		log_uartraw("<OK>\r\n", 6);
 	} else {
-		log_uartraw((uint8_t*) "<FAIL>\r\n", 8);
+		log_uartraw("<FAIL>\r\n", 8);
 	}
 }
 
@@ -754,16 +746,16 @@ HAL_StatusTypeDef can_send_log(HAL_StatusTypeDef send_res) {
 }
 
 // --------- Command
-int cmd_parse_body(char* cmd, struct lm_cmd *store);
-int read_mr_args(char* cmd, uint32_t* out_speed, uint32_t* out_dir);
+int cmd_parse_body(char *cmd, struct lm_cmd *store);
+int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir);
 
 /* Command format is:
  * [#<id>](mr|ms|mp|mpp|mreset|mhome|mcycle|mid)[ <args>]
  */
 
 // return 1 is good, 0 is error.
-int cmd_copy(char* dest, char* buf, int start, int end, int bufsize, int cmdsize) {
-	int len = cycarrcpy(dest, buf, start, end, bufsize, cmdsize);
+int cmd_copy(char *dest, char *buf, int start, int end, int bufsize, int cmdsize) {
+	int len = cycarrtoarr(dest, cmdsize, buf, start, end, bufsize);
 	// 这里要记得 cstr 末尾的 NUL 字符
 	if (len != -1) {
 		dest[len] = '\0';
@@ -774,7 +766,7 @@ int cmd_copy(char* dest, char* buf, int start, int end, int bufsize, int cmdsize
 	}
 }
 
-enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_receiver) {
+enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t *out_receiver) {
 	uint16_t receiver = (uint16_t) -1;
 
 	log_uartf(LOGDEBUG, "Parse: %s", cmd);
@@ -821,7 +813,7 @@ enum inputcmdtype cmd_parse(char* cmd, struct lm_cmd* out_store, uint8_t *out_re
 // return 0: lm_cmd command, command which actually modifies lm_cmd* store.
 // return 1: parse failed
 // return 2: settings command
-int cmd_parse_body(char* cmd, struct lm_cmd *store) {
+int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 	// any input will turn off motor cycle test
 	if (lm_cycle) {
 		log_uartf(LOGINFO, "Cycle off.");
@@ -894,7 +886,7 @@ int cmd_parse_body(char* cmd, struct lm_cmd *store) {
 	return 0;
 }
 
-int read_mr_args(char* cmd, uint32_t* out_speed, uint32_t* out_dir) {
+int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir) {
 	uint32_t dir, speed;
 	// speed 1 ~ 30
 	// 太高的速度在冲击时会引发L6470过流关闭，需要 L6470 Reset 指令重新开启
@@ -983,7 +975,7 @@ void detect_cn1() {
 }
 
 // CAN send lm_cmd
-HAL_StatusTypeDef can_cmd_send(struct lm_cmd* cmd, uint8_t receiver_id) {
+HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id) {
 	uint8_t msg[8];
 	uint32_t pos = cmd->pos_speed;
 	msg[0] = CAN_CMD_VER;
@@ -997,39 +989,44 @@ HAL_StatusTypeDef can_cmd_send(struct lm_cmd* cmd, uint8_t receiver_id) {
 	return can_msg_add(msg, 8);
 }
 
-// when CAN receives data through interrupt
-void can_cmd_run(uint8_t* data, uint8_t len) {
-	// no lm_commit called here, program will commit in main cycle.
-	// 考虑到中断可能发生在主循环的任何地方，这里不要直接更改主循环里面使用的变量。
-	// 只能在主循环里面做一个JOIN信息的步骤，就算JOIN信息做在中断里面一个通知变量也只能在主循环里接受。
-	// 这就像多线程一样要注意公共区域修改的时机。
-	if (len >= 3) {
-		uint8_t ver = data[0], cmd = data[1], id = data[2];
-		if (id == machine_id) {
-			if (ver > CAN_CMD_VER) {
-				log_uartf(LOGERROR, "CAN Message Version Higher than me.");
-				return;
-			}
-			if (cmd == CAN_CMD_LM) {
-				if (lmcan_cached) {
-					log_uartf(LOGWARN, "CAN Ignored: previous command is still cached.");
+// CAN read
+void can_rx_int(uint8_t *data, uint8_t len) {
+	// multiple CAN commands in one main cycle will overwrite.
+	memcpy(canbuf, data, len);
+	canlen = len;
+}
+
+void canbuf_read() {
+	if (canlen > 0) {
+		if (canlen >= 3) {
+			uint8_t ver = canbuf[0], cmd = canbuf[1], id = canbuf[2];
+			if (id == machine_id) {
+				if (ver > CAN_CMD_VER) {
+					log_uartf(LOGERROR, "CAN Message Version Higher than me.");
 					return;
 				}
-				lmcan_cached = 1;
-				// 按照 cmd_run 里面的编码方法重新组装消息
-				lmcan.type = data[3];
-				lmcan.pos_speed = (int32_t) ((data[4] << 16) + (data[5] << 8) + (data[6]));
-				lmcan.dir_hard = data[7];
-			} else if (cmd == CAN_CMD_STRING) {
-				char buf[8] = { 0 };
-				memcpy(buf, data + 2, len - 2);
-				log_uartf(LOGINFO, "CAN Received: %s", buf);
+				if (cmd == CAN_CMD_LM) {
+					if (lmcan_cached) {
+						log_uartf(LOGWARN, "CAN Ignored: previous command is still cached.");
+						return;
+					}
+					lmcan_cached = 1;
+					// 按照 cmd_run 里面的编码方法重新组装消息
+					lmcan.type = canbuf[3];
+					lmcan.pos_speed = (int32_t) ((canbuf[4] << 16) + (canbuf[5] << 8) + (canbuf[6]));
+					lmcan.dir_hard = canbuf[7];
+				} else if (cmd == CAN_CMD_STRING) {
+					char buf[8] = { 0 };
+					memcpy(buf, canbuf + 2, canlen - 2);
+					log_uartf(LOGINFO, "CAN Received: %s", buf);
+				}
+			} else {
+				log_uartf(LOGDEBUG, "Ignore CAN Message with other's id #%hu", (uint16_t) id);
 			}
 		} else {
-			log_uartf(LOGDEBUG, "Ignore CAN Message with other's id #%hu", (uint16_t) id);
+			log_uartf(LOGWARN, "CAN Invalid Message: Too Short.");
 		}
-	} else {
-		log_uartf(LOGWARN, "CAN Invalid Message: Too Short.");
+		canlen = 0;
 	}
 }
 
@@ -1037,6 +1034,10 @@ void can_cmd_run(uint8_t* data, uint8_t len) {
 void led1_flip() {
 	LED1_GPIO->ODR ^= LED1_GPIO_PIN;
 }
+void led2_flip() {
+	LED2_GPIO->ODR ^= LED2_GPIO_PIN;
+}
+
 /* USER CODE END 4 */
 
 /**

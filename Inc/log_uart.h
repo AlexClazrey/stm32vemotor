@@ -14,11 +14,12 @@ enum log_method {
 	LOGDMA,
 };
 
-void log_init(UART_HandleTypeDef *uart, enum log_method method);
+int log_init(UART_HandleTypeDef *uart, enum log_method method);
 void log_setport(UART_HandleTypeDef *huart);
 void log_setlevel(enum log_level level);
-int log_uart(enum log_level level, char* cstr);
-HAL_StatusTypeDef log_uartraw(uint8_t* data, uint16_t len);
+void log_dma_txcplt_callback();
+int log_uartraw(char *data, uint16_t len);
+int log_uart(enum log_level level, const char *cstr);
 int log_uartf(enum log_level level, const char* format, ...);
 
 #endif
