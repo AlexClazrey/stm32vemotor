@@ -27,7 +27,7 @@
  * log_uart(<enum log_level>, <cstr>)
  * log_uartraw(<unsigned char*>, <len>)
  *
- * This module is reentrant with lock error result code -3 but not thread safe.
+ * This module is reentrant with lock error result code -4 but not thread safe.
  *
  * */
 
@@ -46,15 +46,16 @@ static const char *LOG_LINEEND = "\r\n";
 static enum log_level log_output_level = LOGDEBUG;
 static enum log_method log_output_method = LOGDIRECT;
 
-// presume 14 bit is consumed to transmit one byte on average.
-static int log_timeout_factor = LOG_BAUDRATE / 14000;
+// presume 12 bit is consumed to transmit one byte on average.
+static int log_timeout_factor = LOG_BAUDRATE / 12000;
 static int log_lineendlen = 0;
 
 static char logbuf[LOG_TOTAL_BUF_SIZE] = { 0 };
 static volatile uint32_t logstart = 0;
+static volatile uint32_t logissued = 0;
 static volatile uint32_t logend = 0;
 // log buffer needs a lock in reentrant situations
-// this ensures all RW to logstart/logend is in sync.
+// this ensures all RW to logstart/logend/logissued is in sync.
 static volatile int loglock = 0;
 
 // peripherals
@@ -84,17 +85,20 @@ void log_setlevel(enum log_level level) {
 static int log_dma_issue();
 /*
  * Return 0 to 3 for HAL_StatusTypeDef result from HAL UART functions,
+ * Return 10 for data put in queue successfully.
+ * Return 11 for sent by other entrants which is mostly not an error.
  * Return -3 for too small total buffer.
  * Return -4 for lock problem.
  * Return -5 for init function is not properly called.
- * Return -6 for unknown reasons.
- * Return -7 for data put in queue successfully.
- * Return -8 for sent by other entrant which is mostly not an error.
+ * Return -6 for unknown reasons error.
  *
  */
 int log_uartraw(char *data, uint16_t len) {
 	if (loglock) {
 		return -4;
+	}
+	if (len == 0) {
+		return HAL_OK;
 	}
 	if (log_huart) {
 		if (log_output_method == LOGDMA) {
@@ -122,11 +126,11 @@ int log_uartraw(char *data, uint16_t len) {
 			if (issue >= 0) {
 				return issue;
 			} else if (issue == -1) {
-				return -8;
+				return 11;
 			} else if (issue == -2) {
-				return -7;
-			} else if (issue == -3) {
-				return -3;
+				return 10;
+			} else if (issue == -4) {
+				return -4;
 			} else {
 				return -6;
 			}
@@ -141,39 +145,44 @@ int log_uartraw(char *data, uint16_t len) {
 }
 
 void log_dma_txcplt_callback() {
+	// TODO 这里可能有隐藏bug，在这句话之前，TC清除之后如果又有东西触发了一次issue的话，那么这个issue就不是之前的issue值了。
+	// 考虑到这种情况不可能层叠很多次，就算这个函数被多次重入，用一个长度是5的队列也够。
+	logstart = logissued;
 	log_dma_issue();
 }
 
 /*
  * return -1 for nothing to send.
  * return -2 for TX busy, which I suppose it is already occupied by DMA.
- * return -3 for lock error
+ * return -4 for lock error
  **/
 static int log_dma_issue() {
 	HAL_StatusTypeDef res;
-	if (logend == logstart)
-		return -1;
 	if (loglock) {
-		return -3;
+		return -4;
+	}
+	// to ensure logissued and logend is not modified.
+	loglock = 1;
+	if (logend == logissued) {
+		loglock = 0;
+		return -1;
 	}
 	if (__HAL_UART_GET_FLAG(log_huart, USART_SR_TC)) {
-		loglock = 1;
-		if (logend > logstart) {
+		if (logend > logissued) {
 			// if circular array is like a normal array
 			// log from start to end
-			res = HAL_UART_Transmit_DMA(log_huart, (uint8_t*)logbuf + logstart, logend - logstart);
-			if (res == HAL_OK)
-				logstart = logend;
+			res = HAL_UART_Transmit_DMA(log_huart, (uint8_t*)logbuf + logissued, logend - logissued);
+			logissued = logend;
 		} else {
 			// if circular array end cursor is before start cursor
 			// log from start to buffer end.
-			res = HAL_UART_Transmit_DMA(log_huart, (uint8_t*)logbuf + logstart, LOG_TOTAL_BUF_SIZE - logstart);
-			if (res == HAL_OK)
-				logstart = 0;
+			res = HAL_UART_Transmit_DMA(log_huart, (uint8_t*)logbuf + logissued, LOG_TOTAL_BUF_SIZE - logissued);
+			logissued = 0;
 		}
 		loglock = 0;
 		return res;
 	} else {
+		loglock = 0;
 		return -2;
 	}
 }
@@ -264,8 +273,12 @@ static int log_head(char *dest, enum log_level level) {
 		else if (level == LOGERROR)
 			head = LOG_ERROR_HEAD;
 		int slen = strlen(head);
+		if(slen >= LOG_HEAD_BUF_SIZE) {
+			return -2;
+		}
 		strcpy(dest, head);
-		slen += snprintf(dest + slen, 13, "[%lu] ", HAL_GetTick()); // 2^32 is 10-digit, combined with "[]\0" is 13 chars.
+		slen += snprintf(dest + slen, LOG_HEAD_BUF_SIZE - slen, "[%lu] ", HAL_GetTick()); // 2^32 is 10-digit, combined with "[]\0" is 13 chars.
+		// no checking length here, it will output will a truncated time stamp if head buffer is too small.
 		return slen;
 	}
 	return -1;

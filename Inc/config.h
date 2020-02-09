@@ -28,10 +28,13 @@ extern const uint32_t COUNT_INTV;
 extern const uint32_t COUNT_LIMIT;
 
 // 串口
-// 考虑到 115200 一秒钟顶多10KB，那么一个主循环的约10ms不会超过1KB
-#define serial_buffer_size 1000
+// 考虑到 115200 11.5B/ms 那么一个主循环的约10ms不会超过140B
+// 现在的触发器有缓冲区一半填满，全部填满，和IDLE接受完成三个地方，
+// 这些触发器会修改Flag在主循环里面通过检查flag再读入缓冲。
+// 我们设置成两个主循环的大小不会丢失数据。
+#define serial_buffer_size 300
 // 串口命令长度设置
-#define cmd_length_limit 100
+#define cmd_length_limit 40
 
 
 // LED

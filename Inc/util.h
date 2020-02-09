@@ -10,5 +10,7 @@ uint32_t diffu(uint32_t from, uint32_t to, uint32_t overval);
 uint32_t addu(uint32_t a1, uint32_t a2, uint32_t overval);
 int cycarrtoarr(char* dest, size_t destsize, const char* src, size_t start, size_t end, size_t srcsize);
 int arrtocycarr(char* dest, size_t start, size_t end, size_t destsize, const char* src, size_t len);
+int cycarriter(void* arr, const size_t unit, const size_t start, const size_t end, const size_t arrsize, int (*func)(void*, size_t));
+int cycbetween(uint32_t start, uint32_t target, uint32_t end, uint32_t size);
 
 #endif

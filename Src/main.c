@@ -512,9 +512,16 @@ static void MX_GPIO_Init(void) {
 // ----------- Interrupts
 // DMA Signals
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
-	log_dma_txcplt_callback();
+	if(huart == &huart1)
+		log_dma_txcplt_callback();
+}
+void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart) {
+	if(huart == &huart1)
+		inputbuf_setend(serial_buffer_size / 2); // half complete is copy count / 2.
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	if(huart == &huart1)
+		inputbuf_setend(0);
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
@@ -523,13 +530,15 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
 
 // Interrupt Routine For Serial IDLE
 void cmd_serial_int(UART_HandleTypeDef *huart) {
-	// error was handled by HAL, only check IDLE here.
-	if (__HAL_UART_GET_FLAG(huart, USART_SR_IDLE)) {
-		__HAL_UART_CLEAR_FLAG(huart, USART_SR_IDLE);
-		HAL_UART_DMAPause(huart);
-		uint32_t dmacnt = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
-		inputbuf_setend(serial_buffer_size - dmacnt);
-		HAL_UART_DMAResume(huart);
+	if(huart == &huart1) {
+		// error was handled by HAL, only check IDLE here.
+		if (__HAL_UART_GET_FLAG(huart, USART_SR_IDLE)) {
+			__HAL_UART_CLEAR_FLAG(huart, USART_SR_IDLE);
+			HAL_UART_DMAPause(huart);
+			uint32_t dmacnt = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
+			inputbuf_setend(serial_buffer_size - dmacnt);
+			HAL_UART_DMAResume(huart);
+		}
 	}
 }
 
