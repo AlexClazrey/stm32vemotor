@@ -25,7 +25,7 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
-#include "./Dspin/dspin.h"
+#include "Dspin/dspin.h"
 #include "config.h"
 #include "util.h"
 #include "cycletick.h"
@@ -82,6 +82,11 @@ struct lm_cmd lmcan = { 0 };
 char canbuf[8] = { 0 };
 volatile int canlen = 0;
 
+// main cycle
+static uint32_t main_cycle_count = 0;
+
+#define DMA_INPUT_SIZE (UART_INPUT_BUF_SIZE-1)
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -97,6 +102,7 @@ void detect_cn1();
 void can_rx_int(uint8_t *data, uint8_t len);
 void led1_flip();
 void led2_flip();
+void txcplt_report();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -137,7 +143,9 @@ int main(void) {
 	MX_CAN_Init();
 	MX_USART2_UART_Init();
 	/* USER CODE BEGIN 2 */
-	log_init(&huart1, LOGDMA);
+	logu_init(&huart1, LOGU_DMA);
+	logu_setlevel(LOGU_DEBUG);
+//	logu_setlevel(LOGU_TRACE);
 	// motor init
 	L6470_Configuration1();
 	lm_init(plmh);
@@ -146,61 +154,57 @@ int main(void) {
 
 	// 初始化的过程
 	// 目前有向内移动直到 CN1 被按下这一步。
-	log_uart(LOGDEBUG, "Start initializing.");
-	log_uart(LOGDEBUG, "Moving to initial position.");
+	logu_s(LOGU_DEBUG, "Start initializing.");
+	logu_s(LOGU_DEBUG, "Moving to initial position.");
 	lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
 	if (lm_commit(plmh)) {
 		uint32_t init_tick = HAL_GetTick();
 		while (1) {
 			detect_cn1();
 			if (cn1_indicator) {
-				log_uart(LOGDEBUG, "Moving finished");
+				logu_s(LOGU_DEBUG, "Moving finished");
 				lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
 				lm_commit(plmh);
 				break;
 			} else if (HAL_GetTick() - init_tick > 10000) {
-				log_uart(LOGERROR, "Moving timeout.");
+				logu_s(LOGU_ERROR, "Moving timeout.");
 				lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
 				lm_commit(plmh);
 				break;
 			}
 		}
 	} else {
-		log_uart(LOGERROR, "Reset position failed.");
+		logu_s(LOGU_ERROR, "Reset position failed.");
 	}
-	log_uart(LOGDEBUG, "Initialize finished.");
+	logu_s(LOGU_DEBUG, "Initialize finished.");
+
+	// input init
+	/* Enable IDLE Interrupt with DMA circular reading */
+	// Must clear state before enable idle or it will lost in a dead loop
+	huart1.Instance->SR;
+	huart1.Instance->DR;
+	__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
+
+	HAL_UART_Receive_DMA(&huart1, (uint8_t*) inputbuf_get(), DMA_INPUT_SIZE);
 
 	// turn off LED2 after init
 	LED2_GPIO->ODR |= LED2_GPIO_PIN;
 
-	log_uart(LOGDEBUG, "Start listening.");
-
-	// input init
-	/* Enable IDLE Interrupt with DMA circular reading */
-	__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
-
-	HAL_UART_Receive_DMA(&huart1, (uint8_t*)inputbuf_get(), serial_buffer_size);
+	logu_s(LOGU_DEBUG, "Start listening.");
 
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
-	uint32_t count = (uint32_t) -1;
 	while (1) {
 		cycle_tick_start();
-		// cycle count
-		count++;
-		if (count == COUNT_LIMIT) {
-			count = 0;
-		}
-
 		if (led1_blink) {
-			if ((count & 0x3f) == 0) { // 64 cycle
+			if ((main_cycle_count & 0x3f) == 0) { // 64 cycle
 				led1_flip();
 			}
 		}
 		if (led2_blink) {
-			if ((count & 0x2f) == 0) {
+			if ((main_cycle_count & 0x2f) == 0) {
 				led2_flip();
 			}
 		}
@@ -218,7 +222,7 @@ int main(void) {
 		inputbuf_read(plmh);
 
 		// cycle test 放在输入的位置后面
-		mcycle_cmd(plmh, count);
+		mcycle_cmd(plmh, main_cycle_count);
 
 		// 覆盖指令的操作都要确保这个指令之后确实用不到，不需要在下个周期重新触发。
 		struct lm_cmd *lcf = lm_first(plmh);
@@ -240,13 +244,13 @@ int main(void) {
 			// 只有匀速运动的模式里面按下cn1会矫正位置。
 			// 如果要解决越来越向内的误差的话，在使用POS命令的时候，在收回的时候留一些空档。
 			if (!lm_home_set && lmmod.state != lm_state_pos) {
-				log_uart(LOGINFO, "Set home");
+				logu_s(LOGU_INFO, "Set home");
 				lcf->type = lm_cmd_set_home;
 			}
 			if ((lcf->type == lm_cmd_speed && lcf->dir_hard == 1) || (lmmod.state == lm_state_speed && lmmod.dir == 1)
 					|| (lcf->type == lm_cmd_pos && lcf->pos_speed > 0)
 					|| (lmmod.state == lm_state_pos && lmmod.pos > 0)) {
-				log_uart(LOGWARN, "Stop motor due to CN1.");
+				logu_s(LOGU_WARN, "Stop motor due to CN1.");
 				lcf->type = lm_cmd_stop;
 				lcf->dir_hard = 1;
 			}
@@ -263,6 +267,13 @@ int main(void) {
 			lm_home_set = 1;
 		}
 		lm_commit(plmh);
+		// report
+		txcplt_report();
+		// cycle count
+		main_cycle_count++;
+		if (main_cycle_count == COUNT_LIMIT) {
+			main_cycle_count = 0;
+		}
 		cycle_tick_sleep_to(COUNT_INTV);
 	}
 	/* USER CODE END 3 */
@@ -511,17 +522,30 @@ static void MX_GPIO_Init(void) {
 /* USER CODE BEGIN 4 */
 // ----------- Interrupts
 // DMA Signals
+static uint32_t txcpltcount = 0;
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
-	if(huart == &huart1)
-		log_dma_txcplt_callback();
+	if (huart == logu_getport()) {
+		txcpltcount++;
+		logu_dma_txcplt_callback();
+	}
+}
+void txcplt_report() {
+	if (maincyclecount() % 1000 == 0) {
+		logu_f(LOGU_DEBUG, "log dma report: called %lu times in last 1000 cycles.", txcpltcount);
+		txcpltcount = 0;
+	}
 }
 void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart) {
-	if(huart == &huart1)
-		inputbuf_setend(serial_buffer_size / 2); // half complete is copy count / 2.
+	if (huart == &huart1) {
+		logu_s(LOGU_TRACE, "uart input buffer cycle half complete");
+		inputbuf_setend(DMA_INPUT_SIZE / 2); // half complete is copy count / 2.
+	}
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	if(huart == &huart1)
+	if (huart == &huart1) {
+		logu_s(LOGU_TRACE, "uart input buffer cycle complete");
 		inputbuf_setend(0);
+	}
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
@@ -529,14 +553,16 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
 }
 
 // Interrupt Routine For Serial IDLE
+static uint32_t idlecount = 0;
 void cmd_serial_int(UART_HandleTypeDef *huart) {
-	if(huart == &huart1) {
+	if (huart == &huart1) {
 		// error was handled by HAL, only check IDLE here.
 		if (__HAL_UART_GET_FLAG(huart, USART_SR_IDLE)) {
 			__HAL_UART_CLEAR_FLAG(huart, USART_SR_IDLE);
+			logu_f(LOGU_TRACE, "uart input idle %lu", idlecount++);
 			HAL_UART_DMAPause(huart);
 			uint32_t dmacnt = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
-			inputbuf_setend(serial_buffer_size - dmacnt);
+			inputbuf_setend(DMA_INPUT_SIZE - dmacnt);
 			HAL_UART_DMAResume(huart);
 		}
 	}
@@ -549,7 +575,7 @@ void detect_cn1() {
 		// avoid shake - hold at least 5 cycles to trigger
 		if (cn1_hold_count >= 5) {
 			if (!cn1_indicator) {
-				log_uart(LOGDEBUG, "CN1 pressed.");
+				logu_s(LOGU_DEBUG, "CN1 pressed.");
 				cn1_indicator = 1;
 			}
 		} else {
@@ -568,7 +594,7 @@ int cn1_pressed() {
 // CAN read
 void can_rx_int(uint8_t *data, uint8_t len) {
 	// multiple CAN commands in one main cycle will drop and blink led2
-	if(canlen == 0) {
+	if (canlen == 0) {
 		memcpy(canbuf, data, len);
 		canlen = len;
 	} else {
@@ -582,6 +608,10 @@ void led1_flip() {
 }
 void led2_flip() {
 	LED2_GPIO->ODR ^= LED2_GPIO_PIN;
+}
+
+uint32_t maincyclecount() {
+	return main_cycle_count;
 }
 
 /* USER CODE END 4 */
@@ -610,7 +640,7 @@ void assert_failed(uint8_t *file, uint32_t line) {
 	/* USER CODE BEGIN 6 */
 	/* User can add his own implementation to report the file name and line number,
 	 tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-	log_uartf(LOGERROR, "Assert failed: %s line %lu.", file, line);
+	logu_f(LOGU_ERROR, "Assert failed: %s line %lu.", file, line);
 	/* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

@@ -4,13 +4,13 @@
 #include "cycletick.h"
 #include "log_uart.h"
 #include "can_io.h"
-#include "./DSpin/dspin.h"
+#include "DSpin/dspin.h"
 #include "main.h"
 #include <string.h>
 #include <stdio.h>
 
 // Serial input command
-static char inputbuf[serial_buffer_size] = { 0 }; // 这个不需要 volatile 因为在读取这段的过程里读取的内容不会被更新改变，所以可以缓存。
+static char inputbuf[UART_INPUT_BUF_SIZE] = { 0 }; // 这个不需要 volatile 因为在读取这段的过程里读取的内容不会被更新改变，所以可以缓存。
 static int inputstart = 0; // 现在中断程序DMA不检测是不是覆盖，所以不需要volatile了
 static volatile int inputend = 0;
 
@@ -45,7 +45,7 @@ void inputbuf_read(struct lm_handle *plmh) {
 	//
 	while (cycle_tick_now() < 8) {
 		if (!lm_hasspace(plmh)) {
-			log_uart(LOGWARN, "Stop reading input due to full cmd queue");
+			logu_s(LOGU_WARN, "Stop reading input due to full cmd queue");
 			return;
 		}
 		struct lm_cmd cmd = { 0 };
@@ -71,7 +71,7 @@ void inputbuf_read(struct lm_handle *plmh) {
 		} else if (type == input_next) {
 			// do nothing here
 		} else {
-			log_uart(LOGERROR, "Unknown error [01]");
+			logu_s(LOGU_ERROR, "Unknown error [01]");
 		}
 	}
 
@@ -96,7 +96,7 @@ static enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t 
 			break;
 		}
 		cursor++;
-		if (cursor == serial_buffer_size) {
+		if (cursor == UART_INPUT_BUF_SIZE) {
 			cursor = 0;
 		}
 	}
@@ -105,14 +105,14 @@ static enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t 
 	}
 
 	if (cursor == (uint32_t) inputstart) {
-		log_uartf(LOGDEBUG, "Yet another line ending.");
-		inputstart = addu(cursor, 1, serial_buffer_size);
+		logu_f(LOGU_DEBUG, "Yet another line ending.");
+		inputstart = addu(cursor, 1, UART_INPUT_BUF_SIZE);
 		return input_next; // 现在如果 \r\n 就会触发一次 next
 	}
 
-	int res = cmd_copy(cmdbuf, inputbuf, inputstart, cursor, serial_buffer_size, cmd_length_limit);
+	int res = cmd_copy(cmdbuf, inputbuf, inputstart, cursor, UART_INPUT_BUF_SIZE, cmd_length_limit);
 	// 这个时候cursor指向的是 \r\n\0 不可能是 inputend 所以要再加一
-	inputstart = addu(cursor, 1, serial_buffer_size);
+	inputstart = addu(cursor, 1, UART_INPUT_BUF_SIZE);
 
 	if (res) {
 		return cmd_parse(cmdbuf, out_pcmd, out_receiver);
@@ -123,17 +123,17 @@ static enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t 
 
 static void input_feedback(int success) {
 	if (success) {
-		log_uartraw("<OK>\r\n", 6);
+		logu_raw("<OK>\r\n", 6);
 	} else {
-		log_uartraw("<FAIL>\r\n", 8);
+		logu_raw("<FAIL>\r\n", 8);
 	}
 }
 
 static HAL_StatusTypeDef can_send_log(HAL_StatusTypeDef send_res) {
 	if (send_res == HAL_OK) {
-		log_uartf(LOGDEBUG, "CAN Sent.");
+		logu_f(LOGU_DEBUG, "CAN Sent.");
 	} else {
-		log_uartf(LOGERROR, "CAN Send failed.");
+		logu_f(LOGU_ERROR, "CAN Send failed.");
 	}
 	return send_res;
 }
@@ -152,7 +152,7 @@ static int cmd_copy(char *dest, char *buf, int start, int end, int bufsize, int 
 		dest[len] = '\0';
 		return 1;
 	} else {
-		log_uartf(LOGERROR, "Input longer than cmd length limit.");
+		logu_f(LOGU_ERROR, "Input longer than cmd length limit.");
 		return 0;
 	}
 }
@@ -162,7 +162,7 @@ static int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir);
 static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t *out_receiver) {
 	uint16_t receiver = (uint16_t) -1;
 
-	log_uartf(LOGDEBUG, "Parse: %s", cmd);
+	logu_f(LOGU_TRACE, "Parse: %s", cmd);
 
 	// 为了兼容之前的格式
 	if (strncmp(cmd, "sig ", 4) == 0) {
@@ -173,7 +173,7 @@ static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t 
 	if (cmd[0] == '#') {
 		size_t scanlen;
 		if (sscanf(++cmd, "%hu%n", &receiver, &scanlen) != 1 || receiver > 255) {
-			log_uart(LOGERROR, "Cmd id read error.");
+			logu_s(LOGU_ERROR, "Cmd id read error.");
 			return 1;
 		}
 		*out_receiver = (uint8_t) receiver;
@@ -198,7 +198,7 @@ static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t 
 			return input_can;
 		}
 	} else {
-		log_uartf(LOGERROR, "Unknown error [02]");
+		logu_f(LOGU_ERROR, "Unknown error [02]");
 		return input_error;
 	}
 }
@@ -209,7 +209,7 @@ static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t 
 static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 	// any input will turn off motor cycle test
 	if (lm_cycle) {
-		log_uartf(LOGINFO, "Cycle off.");
+		logu_f(LOGU_INFO, "Cycle off.");
 		lm_cycle = 0;
 	}
 	if (cmd[0] == 'm') {
@@ -234,14 +234,14 @@ static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 				machine_id = id;
 				return 2;
 			} else {
-				log_uart(LOGERROR, "Read Machine Id Error, should between 0 and 255.");
+				logu_s(LOGU_ERROR, "Read Machine Id Error, should between 0 and 255.");
 				return 1;
 			}
 		} else if (cmd[1] == 'r' && cmd[2] == ' ') {
 			// 这里一定要注意检验 cmd[2] 是空格，不然可能是NUL字符，就是一定要连续检验，想不到还有这个隐患。
 			uint32_t pos, dir;
 			if (read_mr_args(cmd + 3, &pos, &dir) != 2) {
-				log_uart(LOGERROR, "Read mr command failed.");
+				logu_s(LOGU_ERROR, "Read mr command failed.");
 				return 1;
 			}
 			store->pos_speed = pos;
@@ -252,28 +252,28 @@ static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 		} else if (cmd[1] == 'p') {
 			if (cmd[2] == ' ') {
 				if (sscanf(cmd + 3, "%ld", &(store->pos_speed)) != 1) {
-					log_uart(LOGERROR, "Read mp command failed.");
+					logu_s(LOGU_ERROR, "Read mp command failed.");
 					return 1;
 				}
 			} else if (cmd[2] == 'p' && cmd[3] == ' ') {
 				uint16_t percent;
 				if (sscanf(cmd + 4, "%hu", &percent) != 1) {
-					log_uart(LOGERROR, "Read mpp percent failed.");
+					logu_s(LOGU_ERROR, "Read mpp percent failed.");
 					return 1;
 				}
 				if (percent > 100) {
-					log_uart(LOGERROR, "Mpp percent should between 0 and 100.");
+					logu_s(LOGU_ERROR, "Mpp percent should between 0 and 100.");
 					return 1;
 				}
 				store->pos_speed = (int) ((double) percent / 100 * (lm_limit_out - lm_limit_in) + lm_limit_in);
 			}
 			store->type = lm_cmd_pos;
 		} else {
-			log_uart(LOGERROR, "Command parse failed");
+			logu_s(LOGU_ERROR, "Command parse failed");
 			return 1;
 		}
 	} else {
-		log_uart(LOGERROR, "Command parse failed");
+		logu_s(LOGU_ERROR, "Command parse failed");
 		return 1;
 	}
 	return 0;
@@ -285,15 +285,15 @@ static int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir) {
 	// 太高的速度在冲击时会引发L6470过流关闭，需要 L6470 Reset 指令重新开启
 	uint32_t minsp = 1, maxsp = 30;
 	if (sscanf(cmd, "%lu %lu", &dir, &speed) != 2) {
-		log_uart(LOGERROR, "Parse args failed.");
+		logu_s(LOGU_ERROR, "Parse args failed.");
 		return 0;
 	}
 	if (speed < minsp || speed > maxsp) {
-		log_uartf(LOGERROR, "Speed not in range: %d, range is %d ~ %d.", speed, minsp, maxsp);
+		logu_f(LOGU_ERROR, "Speed not in range: %d, range is %d ~ %d.", speed, minsp, maxsp);
 		return 0;
 	}
 	if (dir != 0 && dir != 1) {
-		log_uart(LOGERROR, "Dir should be 0 or 1.");
+		logu_s(LOGU_ERROR, "Dir should be 0 or 1.");
 		return 0;
 	}
 	*out_speed = speed * 1000;
@@ -328,7 +328,7 @@ int canbuf_read(struct lm_cmd *dest, char *data, size_t len) {
 			uint8_t ver = data[0], cmd = data[1], id = data[2];
 			if (id == machine_id) {
 				if (ver != CAN_CMD_VER) {
-					log_uartf(LOGERROR, "CAN Message version doesn't equal mine.");
+					logu_f(LOGU_ERROR, "CAN Message version doesn't equal mine.");
 					return -1;
 				}
 				if (cmd == CAN_CMD_LM) {
@@ -340,18 +340,18 @@ int canbuf_read(struct lm_cmd *dest, char *data, size_t len) {
 				} else if (cmd == CAN_CMD_STRING) {
 					char buf[8] = { 0 };
 					memcpy(buf, data + 2, len - 2);
-					log_uartf(LOGINFO, "CAN Received: %s", buf);
+					logu_f(LOGU_INFO, "CAN Received: %s", buf);
 					return 2;
 				} else {
-					log_uartf(LOGERROR, "CAN unknown command %hu.", (uint16_t) cmd);
+					logu_f(LOGU_ERROR, "CAN unknown command %hu.", (uint16_t) cmd);
 					return -1;
 				}
 			} else {
-				log_uartf(LOGDEBUG, "Ignore CAN Message with other's id #%hu", (uint16_t) id);
+				logu_f(LOGU_DEBUG, "Ignore CAN Message with other's id #%hu", (uint16_t) id);
 				return -1;
 			}
 		} else {
-			log_uartf(LOGWARN, "CAN Invalid Message: Too Short.");
+			logu_f(LOGU_WARN, "CAN Invalid Message: Too Short.");
 			return -1;
 		}
 	} else {
@@ -376,7 +376,7 @@ static void mcycle_append_cmd(struct lm_handle *plmh, uint32_t count) {
 		// TODO 因为现在POS状态下的校准HOME是关闭的（在之后的注释里），所以一旦移动向内的时候误差向内没有一个HOME校准，后面可能向内的误差累积都没有校准。
 		// 这就会引发问题。
 		lm_cycle_pause_count = count;
-	} else if (lm_cycle_pause_at_full_cycle || diffu(count, lm_cycle_pause_count, COUNT_LIMIT) > 100) {
+	} else if (lm_cycle_pause_at_full_cycle || diffu(lm_cycle_pause_count, count, COUNT_LIMIT) > 100) {
 		struct lm_model lmmod = plmh->mod;
 		// 这个if对应如果设置在每一步暂停一会儿，那么等待一段count计数
 		if ((lmmod.state == lm_state_pos && lmmod.pos == lm_cycle_in) || lmmod.state == lm_state_stop
@@ -386,28 +386,28 @@ static void mcycle_append_cmd(struct lm_handle *plmh, uint32_t count) {
 			// state speed 是进入了匀速模式
 			if (cn1_pressed()) {
 				// 当移动到最内侧CN1被按下。
-				if (!lm_cycle_pause_at_full_cycle || diffu(count, lm_cycle_pause_count, COUNT_LIMIT) > 100) {
+				if (!lm_cycle_pause_at_full_cycle || diffu(lm_cycle_pause_count, count, COUNT_LIMIT) > 100) {
 					// 向外移动
-					log_uart(LOGINFO, "Move forward");
+					logu_s(LOGU_INFO, "Move forward");
 					lm_append_newcmd(plmh, lm_cmd_pos, lm_cycle_out, 0);
 				}
 			} else if (lmmod.state != lm_state_speed) {
 				// 当POS移动完成，没有按下CN1的时候进入向内匀速运动的模式。
 				lm_cycle_speed_count = count;
-				log_uart(LOGINFO, "Finding Home");
+				logu_s(LOGU_INFO, "Finding Home");
 				lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
 			} else {
 				// 进入匀速模式但是没有到头的情况
-				if (diffu(count, lm_cycle_speed_count, COUNT_LIMIT) > 200) {
+				if (diffu(lm_cycle_speed_count, count, COUNT_LIMIT) > 200) {
 					// 太长时间没有到头说明点击进入了过热保护，这个时候等待一段时间再下命令会好。
 					lm_cycle_speed_count = count;
-					log_uart(LOGWARN, "Finding Home Again");
+					logu_s(LOGU_WARN, "Finding Home Again");
 					lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
 				}
 			}
 		} else if (lmmod.state == lm_state_pos && lmmod.pos == lm_cycle_out) {
 			// 当移动到最外侧
-			log_uart(LOGINFO, "Move back");
+			logu_s(LOGU_INFO, "Move back");
 			lm_append_newcmd(plmh, lm_cmd_pos, lm_cycle_in, 0);
 		}
 	}

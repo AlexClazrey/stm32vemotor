@@ -4,6 +4,7 @@
 // Utility Functions
 
 // Subtraction with custom overflow value,
+// from is included, to is not included, return virtually (to - from).
 // value range is [0, overval - 1], can tolerate unsigned negative input [-overval, -1].
 // input larger or equals to overval is considered as negative.
 uint32_t diffu(uint32_t from, uint32_t to, uint32_t overval) {
@@ -11,10 +12,10 @@ uint32_t diffu(uint32_t from, uint32_t to, uint32_t overval) {
 		to += overval;
 	if (from > overval)
 		from += overval;
-	if (to > from)
+	if (to >= from)
 		return to - from;
 	else
-		return to - from + overval;
+		return to + overval - from ;
 }
 
 // Addition with custom overflow value,
@@ -116,6 +117,7 @@ int cycarriter(void* arr, const size_t unit, const size_t start, const size_t en
 			int r = (*func)(cursor, i);
 			if(r)
 				return r;
+			cursor += unit;
 		}}
 	return 0;
 }

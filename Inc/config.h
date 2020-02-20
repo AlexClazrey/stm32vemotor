@@ -32,7 +32,7 @@ extern const uint32_t COUNT_LIMIT;
 // 现在的触发器有缓冲区一半填满，全部填满，和IDLE接受完成三个地方，
 // 这些触发器会修改Flag在主循环里面通过检查flag再读入缓冲。
 // 我们设置成两个主循环的大小不会丢失数据。
-#define serial_buffer_size 300
+#define UART_INPUT_BUF_SIZE 300
 // 串口命令长度设置
 #define cmd_length_limit 40
 
@@ -42,6 +42,9 @@ extern const uint32_t COUNT_LIMIT;
 #define LED1_GPIO_PIN GPIO_PIN_8
 #define LED2_GPIO GPIOC
 #define LED2_GPIO_PIN GPIO_PIN_9
+
+// Tick Report
+#define CYCLETICK_REPORT
 
 /* 以上是设置项目 Configurations End */
 

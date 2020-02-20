@@ -1,6 +1,6 @@
 #include "lm.h"
 #include "util.h"
-#include "./DSpin/dspin.h"
+#include "DSpin/dspin.h"
 #include "log_uart.h"
 #include <string.h>
 
@@ -14,7 +14,8 @@ void lm_init(struct lm_handle *handle) {
 int lm_hasspace(struct lm_handle *handle) {
 	if(handle == NULL)
 		return 0;
-	return diffu(handle->tail, handle->head, lm_handle_queue_len) > 1;
+	uint32_t diff = diffu(handle->tail, handle->head, lm_handle_queue_len);
+	return  diff != 1;
 }
 
 int lm_append_cmd(struct lm_handle *handle, struct lm_cmd *cmd) {
@@ -44,7 +45,7 @@ struct lm_cmd* lm_first(struct lm_handle* handle) {
 	if(handle == NULL)
 		return NULL;
 	if(handle->head >= lm_handle_queue_len) {
-		log_uartf(LOGERROR, "LM cmd queue head out of range");
+		logu_f(LOGU_ERROR, "LM cmd queue head out of range");
 		handle->head = 0;
 		return NULL;
 	}
@@ -74,44 +75,44 @@ int lm_commit(struct lm_handle *handle) {
  * */
 static int lm_commit_cmd(struct lm_cmd *cmd, volatile struct lm_model *model) {
 	if(cmd == NULL || model == NULL) {
-		log_uartf(LOGERROR, "LM lm_commit got null pointer.");
+		logu_f(LOGU_ERROR, "LM lm_commit got null pointer.");
 		return 0;
 	}
 	if(cmd->type == lm_cmd_empty) {
 		return 1;
 	} else if(cmd->type == lm_cmd_reset) {
 		dSPIN_Reset_Device();
-		log_uartf(LOGDEBUG, "LM chip reset.");
+		logu_f(LOGU_TRACE, "LM chip reset.");
 		model->state = lm_state_reset;
 		model->pos = 0;
 		model->speed = 0;
 		model->dir = 0;
 	} else if(cmd->type == lm_cmd_set_home) {
 		dSPIN_Reset_Pos();
-		log_uartf(LOGDEBUG, "LM home position set.");
+		logu_f(LOGU_TRACE, "LM home position set.");
 		model->pos = 0;
 	} else if(cmd->type == lm_cmd_stop) {
 		if(cmd->dir_hard) {
 			dSPIN_Hard_Stop();
-			log_uartf(LOGDEBUG, "LM Hard Stop Commit");
+			logu_f(LOGU_TRACE, "LM Hard Stop Commit");
 		} else {
 			dSPIN_Soft_Stop();
-			log_uartf(LOGDEBUG, "LM Soft Stop Commit");
+			logu_f(LOGU_TRACE, "LM Soft Stop Commit");
 		}
 		model->state = lm_state_stop;
 	} else if(cmd->type == lm_cmd_speed) {
 		dSPIN_Run(cmd->dir_hard, cmd->pos_speed);
-		log_uartf(LOGDEBUG, "LM speed: %ld, dir: %lu", cmd->pos_speed, (uint32_t)cmd->dir_hard);
+		logu_f(LOGU_TRACE, "LM speed: %ld, dir: %lu", cmd->pos_speed, (uint32_t)cmd->dir_hard);
 		model->state = lm_state_speed;
 		model->speed = cmd->pos_speed;
 		model->dir = cmd->dir_hard;
 	} else if(cmd->type == lm_cmd_pos) {
 		if(L6470_BUSY1()) {
 			dSPIN_Hard_Stop();
-			log_uartf(LOGDEBUG, "Stop previous movement.");
+			logu_f(LOGU_TRACE, "Stop previous movement.");
 		}
 		dSPIN_Go_To(cmd->pos_speed);
-		log_uartf(LOGDEBUG, "LM pos: %ld", cmd->pos_speed);
+		logu_f(LOGU_TRACE, "LM pos: %ld", cmd->pos_speed);
 		model->state = lm_state_pos;
 		model->speed = 0;
 		model->pos = cmd->pos_speed;

@@ -2,24 +2,29 @@
 #define __LOG_UART_H__
 #include "stm32f1xx.h"
 
-enum log_level {
-	LOGDEBUG,
-	LOGINFO,
-	LOGWARN,
-	LOGERROR,
+enum logu_level {
+	LOGU_TRACE,
+	LOGU_DEBUG,
+	LOGU_INFO,
+	LOGU_WARN,
+	LOGU_ERROR,
+	LOGU_PANIC,
+	LOGU_NONE,
 };
 
-enum log_method {
-	LOGDIRECT,
-	LOGDMA,
+enum logu_method {
+	LOGU_DIRECT,
+	LOGU_DMA,
 };
 
-int log_init(UART_HandleTypeDef *uart, enum log_method method);
-void log_setport(UART_HandleTypeDef *huart);
-void log_setlevel(enum log_level level);
-void log_dma_txcplt_callback();
-int log_uartraw(char *data, uint16_t len);
-int log_uart(enum log_level level, const char *cstr);
-int log_uartf(enum log_level level, const char* format, ...);
+int logu_init(UART_HandleTypeDef *uart, enum logu_method method);
+void logu_setport(UART_HandleTypeDef *huart);
+UART_HandleTypeDef *logu_getport();
+void logu_setlevel(enum logu_level level);
+enum logu_level logu_getlevel();
+void logu_dma_txcplt_callback();
+int logu_raw(char *data, uint16_t len);
+int logu_s(enum logu_level level, const char *cstr);
+int logu_f(enum logu_level level, const char* format, ...);
 
 #endif
