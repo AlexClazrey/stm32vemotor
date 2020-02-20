@@ -224,6 +224,9 @@ int main(void) {
 		// cycle test 放在输入的位置后面
 		mcycle_cmd(plmh, main_cycle_count);
 
+		// 在这里取出读入的第一条指令，我们限制每次主循环只在电机上执行一条指令，
+		// 这是为了时序和逻辑安全最好的办法。
+		// 取出指令的目的是为了检测这条指令需不需要被覆盖取消。
 		// 覆盖指令的操作都要确保这个指令之后确实用不到，不需要在下个周期重新触发。
 		struct lm_cmd *lcf = lm_first(plmh);
 		if (lcf == NULL) {
