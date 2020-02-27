@@ -46,7 +46,7 @@
 #define LOG_BAUDRATE 115200
 
 // If you want to debug this module.
-// #define LOG_UART_DEBUG
+#define LOG_UART_DEBUG
 
 static const char *LOG_TRACE_HEAD = "[Trace]";
 static const char *LOG_DEBUG_HEAD = "[Debug]";
@@ -272,7 +272,9 @@ static int log_dma_issue() {
 		loglock = 0;
 		return -1;
 	}
-	if (__HAL_UART_GET_FLAG(log_huart, USART_SR_TC)) {
+	// TC 不一定表示它不处于Busy状态。
+	if (__HAL_UART_GET_FLAG(log_huart, USART_SR_TC)
+			&& log_huart->gState == HAL_UART_STATE_READY) {
 		uint32_t start = 0, end = 0;
 		int res = log_tosend(&start, &end);
 		if (res < 0) {
@@ -290,11 +292,12 @@ static int log_dma_issue() {
 
 // TODO 你说如果发现高占用率的Warn或者内部状态检查不一致的错误应该用什么方式通知呢？
 // TODO 如果在TC产生，然后freelines之前，有一个高等级中断又触发了一个DMA issue怎么办。
+// TODO 这一点就需要把 toissue 改成一个FIFO队列。
 // logmetas array must be initialized to zero.
 // verb occupy/issue needs to be sequential, so we need lock to protect it.
 // verb finish is sequential because you cannot have reentrants on the same interrupt
 // verb fill is not sequential if reentrant
-// 对 LOG_LINES_COUNT 的 addu 操作只能往回减，可以保证首尾相连，不能往后加
+// 除了占用，对 LOG_LINES_COUNT 的 addu 操作只能往回减，可以保证首尾相连，不能往后加
 
 // returns the index of the next char of last finished char
 static uint32_t log_lastfinished() {

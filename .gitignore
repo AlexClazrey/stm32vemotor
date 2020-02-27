@@ -129,3 +129,6 @@ local.properties
 Debug/**
 VEMotor.pdf
 VEMotor.txt
+
+# VS Code
+.vscode/settings.json

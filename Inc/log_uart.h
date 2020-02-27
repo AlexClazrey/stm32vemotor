@@ -3,6 +3,7 @@
 #include "stm32f1xx.h"
 
 enum logu_level {
+	LOGU_INVISIBLE,
 	LOGU_TRACE,
 	LOGU_DEBUG,
 	LOGU_INFO,

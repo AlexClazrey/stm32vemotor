@@ -1,18 +1,26 @@
 #include "cycletick.h"
 #include "util.h"
-#include "config.h"
 #include "log_uart.h"
-#ifdef CYCLETICK_REPORT
-#include "main.h"
-#endif
 #include <limits.h>
 
-// tick value when a main cycle starts
-static uint32_t tickstart = 0;
+/* Configurations */
+#include "config.h"
+// 是否开启汇报功能
+#ifdef CYCLETICK_REPORT
 
+// 每个几个周期汇报一次用时统计
 #ifndef CYCLETICK_REPORT_CYCLE
 #define CYCLETICK_REPORT_CYCLE 1000
 #endif
+
+#endif
+
+/* Runtime Variables */
+// tick value when a main cycle starts
+static uint32_t tickstart = 0;
+
+// stat report 
+static uint32_t (*cyclecountfunc)() = NULL;
 static uint32_t tickmax = 0;
 static uint32_t ticksum = 0;
 
@@ -32,7 +40,7 @@ void cycle_tick_sleep_to(uint32_t ms) {
 	uint32_t elapsed = cycle_tick_now();
 #ifdef CYCLETICK_REPORT
 	recordtime(elapsed);
-	if(maincyclecount() % CYCLETICK_REPORT_CYCLE == 0) {
+	if(cyclecountfunc && cyclecountfunc() % CYCLETICK_REPORT_CYCLE == 0) {
 		reporttime();
 	}
 #endif
@@ -42,6 +50,12 @@ void cycle_tick_sleep_to(uint32_t ms) {
 	}
 	while (cycle_tick_now() < ms)
 		;
+}
+
+#ifdef CYCLETICK_REPORT
+// ---- stat report functions
+void cycle_tick_init_report(uint32_t (*cyclecount)()) {
+	cyclecountfunc = cyclecount;
 }
 
 static void recordtime(uint32_t used) {
@@ -61,3 +75,4 @@ static void reporttime() {
 	ticksum = 0;
 	tickmax = 0;
 }
+#endif

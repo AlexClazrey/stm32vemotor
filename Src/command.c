@@ -1,14 +1,50 @@
 #include "command.h"
-#include "config.h"
 #include "util.h"
 #include "cycletick.h"
 #include "log_uart.h"
 #include "can_io.h"
 #include "DSpin/dspin.h"
+#include "wifi8266/wifi_8266_mod.h"
 #include "main.h"
 #include <string.h>
 #include <stdio.h>
 
+/* Configuration 设置项目 */
+#include "config.h"
+
+// 这个是机器编号，只能是一个字节。
+extern uint8_t machine_id;
+
+// 移动到比例位置的时候使用的范围。
+extern const int lm_limit_out;
+extern const int lm_limit_in;
+
+// 电机循环测试配置
+extern const int lm_cycle_out;
+extern const int lm_cycle_in;
+// 1的时候只有跑完一整个测试循环，点击在最里面的位置才会暂停一会儿，
+// 0的时候在测试里的每一步都会暂停一会儿。
+extern int lm_cycle_pause_at_full_cycle;
+
+// CAN 命令参数
+extern const uint8_t CAN_CMD_VER;
+extern const uint8_t CAN_CMD_LM;
+extern const uint8_t CAN_CMD_STRING;
+
+
+#ifndef UART_INPUT_BUF_SIZE 
+#define UART_INPUT_BUF_SIZE 300
+#endif
+
+#ifndef cmd_length_limit 
+#define cmd_length_limit 40
+#endif
+
+// 引用主循环的配置
+extern const uint32_t COUNT_LIMIT;
+
+
+/* Runtime Variables */
 // Serial input command
 static char inputbuf[UART_INPUT_BUF_SIZE] = { 0 }; // 这个不需要 volatile 因为在读取这段的过程里读取的内容不会被更新改变，所以可以缓存。
 static int inputstart = 0; // 现在中断程序DMA不检测是不是覆盖，所以不需要volatile了
@@ -16,6 +52,11 @@ static volatile int inputend = 0;
 
 // cmd parse buffer
 static char cmdbuf[cmd_length_limit + 1] = { 0 }; // 这个只会在主循环里面parse，所以不需要volatile
+
+// WiFi
+// 这里写得丑了一点强行引用
+extern UART_HandleTypeDef huart2;
+static Wifi_HandleTypeDef hwifi = {.huart = &huart2};
 
 // motor cycle test
 static int lm_cycle = 0; // 循环测试开启指示
@@ -206,6 +247,7 @@ static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t 
 // return 0: lm_cmd command, command which actually modifies lm_cmd* store.
 // return 1: parse failed
 // return 2: settings command
+// return 3: wifi command
 static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 	// any input will turn off motor cycle test
 	if (lm_cycle) {
@@ -272,6 +314,29 @@ static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 			logu_s(LOGU_ERROR, "Command parse failed");
 			return 1;
 		}
+	} else if(cmd[0] == 'w') {
+		// TODO 在wifi的callstack没有完全释放的时候不要执行下一个命令
+		// 应该向上Log wifi busy这句话
+		if(strncmp(cmd+1, "setup", 5) == 0) {
+			// set up wifi
+			// 1. check "AT" twice (to remove noise input)
+			// 2. AT+CWMODE=1 setmodeclient()
+			// 3. AT+CIPMUX=0 setsingleconn()
+			// 4. AT+CIPMODE=1 setmodetrans()
+
+		} else if(strncmp(cmd+1, "join", 4) == 0) {
+			// join ap
+			//
+		} else if(strncmp(cmd+1, "tcp", 3) == 0) {
+			// tcp connect
+		} else if(strncmp(cmd+1, "trans", 5) == 0) {
+			// set transparent
+
+		} else if(strncmp(cmd+1, "dis", 3) == 0) {
+			// tcp disconnect
+		} else if(strncmp(cmd+1, "leave", 5) == 0) {
+			// leave ap
+		}
 	} else {
 		logu_s(LOGU_ERROR, "Command parse failed");
 		return 1;
@@ -300,6 +365,12 @@ static int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir) {
 	*out_dir = dir;
 	return 2;
 }
+
+// WiFi receive
+// TODO 当Wifi进入直传模式之后，先用一个缓冲区收集输入，然后在主循环里面调取解析函数
+// 解析函数可以使用
+
+
 
 // CAN send lm_cmd
 HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id) {

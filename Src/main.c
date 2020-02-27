@@ -64,7 +64,13 @@ DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
 
-/* program variables */
+/* Configurations */
+// definitions are in config.c .
+// main cycle time settings
+extern const uint32_t COUNT_INTV;
+extern const uint32_t COUNT_LIMIT;
+
+/* runtime variables */
 
 // led
 int led1_blink = 0;
@@ -198,6 +204,7 @@ int main(void) {
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
+	cycle_tick_init_report(maincyclecount);
 	while (1) {
 		cycle_tick_start();
 		if (led1_blink) {
@@ -542,7 +549,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
 }
 void txcplt_report() {
 	if (maincyclecount() % 1000 == 0) {
-		logu_f(LOGU_DEBUG, "log dma report: called %lu times in last 1000 cycles.", txcpltcount);
+		logu_f(LOGU_DEBUG, "log report: wrote %lu times in last 1000 cycles.", txcpltcount);
 		txcpltcount = 0;
 	}
 }
@@ -570,7 +577,7 @@ void cmd_serial_int(UART_HandleTypeDef *huart) {
 		// error was handled by HAL, only check IDLE here.
 		if (__HAL_UART_GET_FLAG(huart, USART_SR_IDLE)) {
 			__HAL_UART_CLEAR_FLAG(huart, USART_SR_IDLE);
-			logu_f(LOGU_TRACE, "uart input idle %lu", idlecount++);
+			logu_f(LOGU_INVISIBLE, "uart input idle %lu", idlecount++);
 			HAL_UART_DMAPause(huart);
 			uint32_t dmacnt = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
 			inputbuf_setend(DMA_INPUT_SIZE - dmacnt);
