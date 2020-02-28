@@ -62,7 +62,7 @@ static char cmdbuf[cmd_length_limit + 1] = { 0 }; // 这个只会在主循环里
 // 这里写得丑了一点强行引用
 extern UART_HandleTypeDef huart2;
 static Wifi_HandleTypeDef hwifi = {.huart = &huart2};
-static int wifi_change_to_raw_when_success = 1;
+static int wifi_change_to_raw_when_success = 0;
 static int wifi_pipe_raw = 0;
 
 // motor cycle test
@@ -462,6 +462,7 @@ void wifi_rx_to_uart() {
 			hwifi.recv.idle = 0;
 			hwifi.recv.len = 0;
 		} else {
+			logu_s(LOGU_INFO, "wifi prints:");
 			logu_raw(hwifi.recv.data, hwifi.recv.len);
 			if (hwifi.callstack.len == 0) {
 				hwifi.recv.idle = 0;
@@ -473,9 +474,8 @@ void wifi_rx_to_uart() {
 
 static char wifi_greetings[50];
 void wifi_auto_setup() {
-	snprintf(wifi_greetings, 50, "Machine %hu greetings.", (uint16_t)machine_id);
+	snprintf(wifi_greetings, 50, "Machine %hu greetings (T A T).", (uint16_t)machine_id);
 	wifi_task_add(&hwifi, wifi_stopsend);
-	wifi_task_add_withargs(&hwifi, wifi_task_delay, 1, (int[]){100});
 	wifi_task_add(&hwifi, wifi_checkat);
 	wifi_task_add(&hwifi, wifi_setmodewifi_client);
 	wifi_task_add(&hwifi, wifi_setsingleconn);
@@ -484,10 +484,12 @@ void wifi_auto_setup() {
 	wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, 2, (int[] ) { (int) WIFI_TCP_IP, (int) WIFI_TCP_PORT });
 	wifi_task_add(&hwifi, wifi_startsend);
 	wifi_task_add_withargs(&hwifi, wifi_send_str_args, 1, (int[] ) { (int) wifi_greetings });
+	wifi_task_add_withargs(&hwifi, wifi_task_delay, 1, (int[]){100});
+	wifi_task_add(&hwifi, wifi_stopsend);
 	wifi_task_add(&hwifi, wifi_checkat);
 	// TODO 最后一个任务最好是一个检测连接状态的任务。
 	// TODO 怎么做TASK失败的条件跳转？你可以在后面设置一个程序状态字寄存器，这样看上去就像虚拟机了。
-	wifi_change_to_raw_when_success = 1;
+	//	wifi_change_to_raw_when_success = 1;
 }
 
 void wifi_tick_callback(WifiRtnState state, int index, int finished) {

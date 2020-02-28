@@ -506,6 +506,8 @@ WifiRtnState wifi_stopsend(Wifi_HandleTypeDef *hwifi) {
     const char *inst = "+++";
     HAL_StatusTypeDef sent = wifi_send_str(hwifi, inst);
     CHECKSENT;
+    // delay 100ms 
+    wifi_frame_add(hwifi, wifi_dummyframe, HAL_GetTick() + 100, wifi_trigger_none);
     return WRS_OK;
 }
 

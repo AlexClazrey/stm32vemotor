@@ -162,7 +162,7 @@ int main(void) {
 	// 初始化的过程
 	// 目前有向内移动直到 CN1 被按下这一步。
 	logu_s(LOGU_DEBUG, "Start initializing.");
-	if(INIT_MOTOR_MOVE) {
+	if (INIT_MOTOR_MOVE) {
 		logu_s(LOGU_DEBUG, "Moving to initial position.");
 		lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
 		if (lm_commit(plmh)) {
@@ -188,7 +188,7 @@ int main(void) {
 		logu_s(LOGU_DEBUG, "Skip motor move.");
 	}
 
-	if(INIT_WIFI_SETUP) {
+	if (INIT_WIFI_SETUP) {
 		wifi_auto_setup();
 	}
 	logu_s(LOGU_DEBUG, "Initialize finished.");
@@ -205,7 +205,7 @@ int main(void) {
 	huart2.Instance->SR;
 	huart2.Instance->DR;
 	__HAL_UART_ENABLE_IT(&huart2, UART_IT_IDLE);
-	HAL_UART_Receive_DMA(&huart2, (uint8_t*)(wifi_gethandler()->recv.data), WIFI_RECV_DMA_RANGE);
+	HAL_UART_Receive_DMA(&huart2, (uint8_t*) (wifi_gethandler()->recv.data), WIFI_RECV_DMA_RANGE);
 
 	// turn off LED2 after init
 	LED2_GPIO->ODR |= LED2_GPIO_PIN;
@@ -220,12 +220,12 @@ int main(void) {
 	while (1) {
 		cycle_tick_start();
 		if (led1_blink) {
-			if ((main_cycle_count & 0x3f) == 0) { // 64 cycle
+			if ((main_cycle_count % led1_blink) == 0) { // 64 cycle
 				led1_flip();
 			}
 		}
 		if (led2_blink) {
-			if ((main_cycle_count & 0x2f) == 0) {
+			if ((main_cycle_count % led2_blink) == 0) {
 				led2_flip();
 			}
 		}
@@ -578,10 +578,17 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 		inputbuf_setend(0);
 	} else if (huart == &huart2) {
 		logu_s(LOGU_TRACE, "wifi rx buffer cycle complete");
-		Wifi_HandleTypeDef* hwifi = wifi_gethandler();
+		Wifi_HandleTypeDef *hwifi = wifi_gethandler();
 		hwifi->recv.idle = 1;
 		hwifi->recv.len = WIFI_RECV_DMA_RANGE;
 	}
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+	if (huart == &huart1)
+		led2_blink = 200;
+	else if (huart == &huart2)
+		led2_blink = 50;
 }
 
 void txcplt_report() {
@@ -589,10 +596,6 @@ void txcplt_report() {
 		logu_f(LOGU_DEBUG, "log report: wrote %lu times in last 1000 cycles.", txcpltcount);
 		txcpltcount = 0;
 	}
-}
-
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
-	led2_blink = 1;
 }
 
 // Interrupt Routine For Serial IDLE
@@ -673,8 +676,7 @@ uint32_t maincyclecount() {
 void Error_Handler(void) {
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
-	led1_blink = 1;
-	led1_flip();
+	led1_blink = 100;
 	/* USER CODE END Error_Handler_Debug */
 }
 
