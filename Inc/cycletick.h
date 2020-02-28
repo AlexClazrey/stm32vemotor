@@ -6,9 +6,6 @@
 void cycle_tick_start();
 uint32_t cycle_tick_now();
 void cycle_tick_sleep_to(uint32_t ms);
-
-#ifdef CYCLETICK_REPORT
 void cycle_tick_init_report(uint32_t (*cyclecount)());
-#endif
 
 #endif

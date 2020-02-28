@@ -195,7 +195,7 @@ static void log_freesent();
  * Return -7 for LOG_LINES_COUNT too small.
  *
  */
-int logu_raw(char *data, uint16_t len) {
+int logu_raw(const char *data, uint16_t len) {
 	if (loglock) {
 		return -4;
 	}

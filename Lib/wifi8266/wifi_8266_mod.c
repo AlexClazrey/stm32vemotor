@@ -37,10 +37,15 @@
  一个 task 失败不会终止后续的 task 执行，如果想要中止，那么在回调函数里面使用 wifi_task_clear ，
  因为回调函数在后续的 task 开始之前被触发。
 
+ ESP-01 模块的功能在透传开启的时候，收到的TCP数据会直接输出，透传关闭的时候会有连接说明加输出。 
+ 关闭传输模式的语句 "+++" 和其他信息之间至少间隔100ms，在task队列里面使用wifi_task_delay函数可以做到延时。
+
  速记：
  在主循环里调用 wifi_tick 填入wifi_handle和AT指令完成的回调函数。
+ 在 stm32f1xx_it.c 里面收到 IDLE 中断的时候调用 wifi_rx_idle_int 。
  不使用 task 队列发起AT指令只要调用对应的函数就行。
- 使用 task 队列的话调用 wifi_task_add 添加任务。
+ 使用 task 队列的话调用 wifi_task_add 或者 wifi_task_add_withargs 添加任务。
+ 在使用 wifi_startsend 开启传输之后 wifi_send_raw/str 可以写入数据，完成之后使用 wifi_stopsend 退出传输模式。
 
  */
 
@@ -58,8 +63,8 @@
  所以这种情况也要 HARD RESET 。
  看起来真的很需要一个GPIO单独连接到RESET上。
  4.	在 Reset 之后最后的输出也不一定是 ready\r\n 才能表示正常启动，关键判别在于AT有反应。
- 这可能要几次 RESET 也做不到，网上说这是因为ESP8266的电源要求很高，要很稳定。
- 但是在单独的试验电路里面我加了2000uF的固态电容就没事了，好像第三条的问题也是一样的。
+ 这可能要几次 RESET ，网上说这是因为ESP8266的电源要求很高，要很稳定。
+ 但是在单独的试验电路里面我加了2000uF的固态电容就没事了。
  最好单片机初始化的时候就RESET试试。
 
  */
@@ -71,6 +76,7 @@ static const char *RTNERR = "\r\nERROR\r\n";
 // 8266 prints "busy p...\r\n" if you give a another command while processing previous one.
 static const char *RTNBUSY = "\r\nbusy ";
 
+static char *rtnstrarr[6] = { "OK", "Error", "Invalid", "Timeout", "Pass", "Busy" };
 /* Functions */
 /* ---- Macros ---- */
 #define CHECKSENT       \
@@ -108,18 +114,32 @@ static inline WifiRtnState recvstrsignal(const char *str) {
     return checkok(str) ? WRS_OK : checkerror(str) ? WRS_ERROR : checkbusy(str) ? WRS_BUSY : WRS_INVALID;
 }
 
-static char *rtnstrarr[6] = { "OK", "Error", "Invalid", "Timeout", "Pass", "Busy" };
 const char* rtntostr(WifiRtnState state) {
     return rtnstrarr[(int) state];
 }
 
 HAL_StatusTypeDef wifi_send_str(Wifi_HandleTypeDef *hwifi, const char *data) {
-    logu_f(LOGU_TRACE, "wifi send:\r\n%s", data);
+//    logu_f(LOGU_TRACE, "wifi send:\r\n%s", data);
     return HAL_UART_Transmit_DMA(hwifi->huart, (uint8_t*) data, strlen(data));
 }
 
 HAL_StatusTypeDef wifi_send_raw(Wifi_HandleTypeDef *hwifi, const char *buffer, size_t len) {
     return HAL_UART_Transmit_DMA(hwifi->huart, (uint8_t*) buffer, len);
+}
+
+
+/* ---- Wifi Rx Interrupt Routine Functions ---- */
+
+// Call this function in UART Interrupt. You need to enable IDLE interrupt first.
+void wifi_rx_idle_int(Wifi_HandleTypeDef *hwifi, DMA_HandleTypeDef* dmarx) {
+    if (__HAL_UART_GET_FLAG(hwifi->huart, USART_SR_IDLE)) {
+        __HAL_UART_CLEAR_FLAG(hwifi->huart, USART_SR_IDLE);
+        HAL_UART_DMAStop(hwifi->huart);
+        uint32_t dmacnt = __HAL_DMA_GET_COUNTER(dmarx);
+        hwifi->recv.len = WIFI_RECV_DMA_RANGE - dmacnt;
+        hwifi->recv.idle = 1;
+        HAL_UART_Receive_DMA(hwifi->huart, (uint8_t*) hwifi->recv.data, WIFI_RECV_DMA_RANGE);
+    }
 }
 
 /* ---- Wifi Callstack Frame Functions ---- */
@@ -153,7 +173,7 @@ static WifiRtnState wifi_tick_p1(Wifi_HandleTypeDef *hwifi) {
             st->len++;
             break;
         }
-        logu_f(LOGU_TRACE, "wifi stack len after run: %d, func: %lu", st->len, (uint32_t) st->stack[st->len].nextfunc);
+//        logu_f(LOGU_TRACE, "wifi stack len after run: %d, func: %lu", st->len, (uint32_t) st->stack[st->len].nextfunc);
         // 如果是底层那么弹出结果，这个结果在主循环或者回调里面处理。
         if (st->len == 0)
             result = subroutine;
@@ -195,9 +215,7 @@ static WifiRtnState wifi_tick_p2(Wifi_HandleTypeDef *hwifi, wifi_task_callback c
         if (wifi_callstack_isempty(hwifi)) {
             // 如果这个task瞬间完成或者瞬间出错，那么从这里返回结果，不能丢失汇报
             result = taskresult;
-            // 如果不是瞬间完成，那么我们等到那个异步的结果返回再判断这个task有没有成功。
-            // 所以这里只要对瞬间完成的 task 给出回调
-            callback(result, hwifi->task.cursor - 1, wifi_task_isfinished(hwifi));
+            // 这种情况也会走到下面的回调上，所以这里不使用回调。
         }
     }
 
@@ -253,8 +271,7 @@ static int wifi_tick_frame_timeout(Wifi_HandleTypeDef *hwifi, struct wifi_stack_
     return 0;
 }
 
-// Unused for now
-static WifiRtnState UNUSED_ATTRIB wifi_frame_add_withargs(Wifi_HandleTypeDef *hwifi, wifi_func_withargs nextfunc,
+static WifiRtnState wifi_frame_add_withargs(Wifi_HandleTypeDef *hwifi, wifi_func_withargs nextfunc,
         uint32_t deadline, wifi_triggerfunc trigger, int argc, int argv[WIFI_ARGV_SIZE]) {
     if (argc > WIFI_ARGV_SIZE) {
         return WRS_ERROR;
@@ -343,14 +360,16 @@ static WifiRtnState wifi_task_run(Wifi_HandleTypeDef *hwifi, struct wifi_task_it
 static int wifi_trigger_atsignal(const char *data) {
     return recvstrsignal(data) != WRS_INVALID;
 }
+// 这可以做到一个延时层的效果。
+static int wifi_trigger_none(const char* data) {
+    return 0;
+}
 
-// Unused function
-static WifiRtnState UNUSED_ATTRIB wifi_dummyframe(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine) {
+static WifiRtnState wifi_dummyframe(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine) {
     return WRS_OK;
 }
 
 static WifiRtnState wifi_checkrecvsignal(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine) {
-    logu_s(LOGU_TRACE, "checkrecvsignal called");
     THROWTIMEOUT;
     return recvstrsignal(hwifi->recv.data);
 }
@@ -392,7 +411,6 @@ WifiRtnState wifi_joinap_args(Wifi_HandleTypeDef *hwifi, int argc, int *argv) {
 }
 
 static WifiRtnState wifi_joinap_2(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine) {
-    logu_s(LOGU_TRACE, "joinap_2 called");
     THROWTIMEOUT;
     HAL_StatusTypeDef sent = wifi_send_str(hwifi, joinbuf);
     CHECKSENT;
@@ -489,4 +507,29 @@ WifiRtnState wifi_stopsend(Wifi_HandleTypeDef *hwifi) {
     HAL_StatusTypeDef sent = wifi_send_str(hwifi, inst);
     CHECKSENT;
     return WRS_OK;
+}
+
+// argv[0] is uint32_t delay in ms.
+WifiRtnState wifi_task_delay(Wifi_HandleTypeDef* hwifi, int argc, int *argv) {
+    if (argc != 1) {
+        return WRS_ERROR;
+    }
+    wifi_frame_add(hwifi, wifi_dummyframe, HAL_GetTick() + (uint32_t)(argv[0]), wifi_trigger_none);
+    return WRS_OK;
+}
+
+// argv[0] is str to send
+WifiRtnState wifi_send_str_args(Wifi_HandleTypeDef *hwifi, int argc, int* argv) {
+    if (argc != 1) {
+        return WRS_ERROR;
+    }
+    return wifi_send_str(hwifi, (char*)argv[0]) == HAL_OK ? WRS_OK : WRS_ERROR;
+}
+
+// argv[0] is buffer, argv[1] is len.
+WifiRtnState wifi_send_raw_args(Wifi_HandleTypeDef *hwifi, int argc, int* argv) {
+    if (argc != 2) {
+        return WRS_ERROR;
+    }
+    return wifi_send_raw(hwifi, (char*)argv[0], (size_t)argv[1]) == HAL_OK ? WRS_OK : WRS_ERROR;
 }

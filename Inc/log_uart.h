@@ -3,7 +3,7 @@
 #include "stm32f1xx.h"
 
 enum logu_level {
-	LOGU_INVISIBLE,
+	LOGU_TINY,
 	LOGU_TRACE,
 	LOGU_DEBUG,
 	LOGU_INFO,
@@ -24,7 +24,7 @@ UART_HandleTypeDef *logu_getport();
 void logu_setlevel(enum logu_level level);
 enum logu_level logu_getlevel();
 void logu_dma_txcplt_callback();
-int logu_raw(char *data, uint16_t len);
+int logu_raw(const char *data, uint16_t len);
 int logu_s(enum logu_level level, const char *cstr);
 int logu_f(enum logu_level level, const char* format, ...);
 

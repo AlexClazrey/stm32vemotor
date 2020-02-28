@@ -31,6 +31,11 @@ extern const uint8_t CAN_CMD_VER;
 extern const uint8_t CAN_CMD_LM;
 extern const uint8_t CAN_CMD_STRING;
 
+// WIFI 连接设置
+extern char* WIFI_SSID;
+extern char* WIFI_PWD;
+extern char* WIFI_TCP_IP;
+extern uint16_t WIFI_TCP_PORT;
 
 #ifndef UART_INPUT_BUF_SIZE 
 #define UART_INPUT_BUF_SIZE 300
@@ -57,21 +62,25 @@ static char cmdbuf[cmd_length_limit + 1] = { 0 }; // 这个只会在主循环里
 // 这里写得丑了一点强行引用
 extern UART_HandleTypeDef huart2;
 static Wifi_HandleTypeDef hwifi = {.huart = &huart2};
+static int wifi_change_to_raw_when_success = 1;
+static int wifi_pipe_raw = 0;
 
 // motor cycle test
 static int lm_cycle = 0; // 循环测试开启指示
 static uint32_t lm_cycle_pause_count = 0; // 暂停的等待计数
 static uint32_t lm_cycle_speed_count = 0; // 在过热无反应时候的等待计数
 
+/* Functions */
 // ------------- Input Buffer Process
 static void input_feedback(int success);
-static enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_receiver);
-static int cmd_copy(char *dest, char *buf, int start, int end, int bufsize, int cmdsize);
+static enum inputcmdtype inputbuf_read_one_cmd(const char* buffer, struct lm_cmd *out_pcmd, uint8_t *out_receiver);
+static int cmd_copy(char *dest, const char *buf, int start, int end, int bufsize, int cmdsize);
 static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t *out_recevier);
 static HAL_StatusTypeDef can_send_log(HAL_StatusTypeDef send_res);
 
-void inputbuf_read(struct lm_handle *plmh) {
-	// 这个函数试把解析InputBuffer的工作移动到主循环里面，这样可以面对大批量的命令汇入
+void uart_user_inputbuf_read(struct lm_handle *plmh) {
+	// 这个函数把解析InputBuffer的工作从中断里面遇到行尾设置结束符，
+	// 改成移动到主循环里面，这样可以一个周期里面对超过一条的命令汇入。
 	// 首先先向后寻找\r\n或者\0的位置，复制到cmdbuf里面，然后清理cmdbuf，然后解析。
 	// 为了能在一次主循环里面处理多条命令。
 	// 需要创建不止一个命令缓存而是很多个命令缓存池
@@ -81,41 +90,68 @@ void inputbuf_read(struct lm_handle *plmh) {
 	// 如过缓存池被用满了那么停止这里的Read Input同时应该发出一个警告。
 	// 发送很多个CAN指令也可能消耗很多时间，所以这里还需要在Parse一个新的命令之前注意检查时间，
 	// 如果时间不多了那么就留到下一个循环处理。
-	// 我也需要log一下处理一条命令需要用多少时间。
-	// copy to cmd buffer and parse
-	//
-	while (cycle_tick_now() < 8) {
-		if (!lm_hasspace(plmh)) {
-			logu_s(LOGU_WARN, "Stop reading input due to full cmd queue");
-			return;
-		}
-		struct lm_cmd cmd = { 0 };
-		uint8_t receiver = 0;
-		enum inputcmdtype type = inputbuf_read_one_cmd(&cmd, &receiver);
+	
 
-		if (type == input_error) {
-			// Error details was printed in parse function
-			input_feedback(false);
-		} else if (type == input_empty) {
-			// 读到empty表示输入缓冲区已经读完了。
-			break;
-		} else if (type == input_lmcmd) {
-			// 如果是本机的命令，那么加入cmd queue。
-			lm_append_cmd(plmh, &cmd);
-			input_feedback(true);
-		} else if (type == input_settings) {
-			input_feedback(true);
-		} else if (type == input_can) {
-			HAL_StatusTypeDef hs = can_cmd_send(&cmd, receiver);
-			can_send_log(hs);
-			input_feedback(hs == HAL_OK);
-		} else if (type == input_next) {
-			// do nothing here
-		} else {
-			logu_s(LOGU_ERROR, "Unknown error [01]");
+	if(wifi_pipe_raw) {
+		// 如果开启WIFI透传，那么把用户在串口上的输入直接写入WIFI
+		// 同时给出 Echo
+		// 按下 Ctrl+D (ASCII EOT) 退出透传模式
+		uint32_t oldend = inputend;
+		if(inputbuf[inputstart] == 0x04) {
+			wifi_pipe_raw = 0;
+			inputstart++;
+			wifi_task_add(&hwifi, wifi_stopsend);
+			logu_s(LOGU_WARN, "Leave wifi pipe mode.");
+		} else if(inputstart != oldend) {
+			const char* src = inputbuf+inputstart;
+			size_t len;
+			if(inputstart < oldend) {
+				len = oldend-inputstart;
+				inputstart = oldend;
+			} else {
+				len = UART_INPUT_DMA_READ_RANGE - inputstart;
+				inputstart = 0;
+			}
+			wifi_send_raw(&hwifi, src, len);
+			logu_raw(src, len);
+		}
+	} else {
+		while (cycle_tick_now() < 8) {
+			if (!lm_hasspace(plmh)) {
+				logu_s(LOGU_WARN, "Stop reading input due to full lm_cmd queue");
+				return;
+			}
+			struct lm_cmd cmd = { 0 };
+			uint8_t receiver = 0;
+			
+			enum inputcmdtype type = inputbuf_read_one_cmd(inputbuf_get(), &cmd, &receiver);
+
+			if (type == input_error) {
+				// Error details was printed in parse function
+				input_feedback(false);
+			} else if (type == input_empty) {
+				// 读到empty表示输入缓冲区已经读完了。
+				break;
+			} else if (type == input_lmcmd) {
+				// 如果是本机的命令，那么加入cmd queue。
+				lm_append_cmd(plmh, &cmd);
+				input_feedback(true);
+			} else if (type == input_settings) {
+				input_feedback(true);
+			} else if (type == input_can) {
+				HAL_StatusTypeDef hs = can_cmd_send(&cmd, receiver);
+				can_send_log(hs);
+				HAL_Delay(1); // TODO 这里强行停顿不太好，但是CAN SEND需要一点时间。
+				input_feedback(hs == HAL_OK);
+			} else if(type == input_wifi) {
+				input_feedback(true);
+			} else if (type == input_next) {
+				// do nothing here
+			} else {
+				logu_s(LOGU_ERROR, "Unknown error [01]");
+			}
 		}
 	}
-
 }
 
 char* inputbuf_get() {
@@ -126,12 +162,12 @@ void inputbuf_setend(uint32_t end) {
 	inputend = end;
 }
 
-static enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t *out_receiver) {
+static enum inputcmdtype inputbuf_read_one_cmd(const char* src, struct lm_cmd *out_pcmd, uint8_t *out_receiver) {
 	uint32_t cursor = inputstart;
 	int triggered = 0;
 	while (cursor != (uint32_t) inputend) {
 		// check char here
-		char ch = inputbuf[cursor];
+		char ch = src[cursor];
 		if (ch == '\0' || ch == '\r' || ch == '\n') {
 			triggered = 1;
 			break;
@@ -151,7 +187,7 @@ static enum inputcmdtype inputbuf_read_one_cmd(struct lm_cmd *out_pcmd, uint8_t 
 		return input_next; // 现在如果 \r\n 就会触发一次 next
 	}
 
-	int res = cmd_copy(cmdbuf, inputbuf, inputstart, cursor, UART_INPUT_BUF_SIZE, cmd_length_limit);
+	int res = cmd_copy(cmdbuf, src, inputstart, cursor, UART_INPUT_BUF_SIZE, cmd_length_limit);
 	// 这个时候cursor指向的是 \r\n\0 不可能是 inputend 所以要再加一
 	inputstart = addu(cursor, 1, UART_INPUT_BUF_SIZE);
 
@@ -186,7 +222,7 @@ static HAL_StatusTypeDef can_send_log(HAL_StatusTypeDef send_res) {
  */
 
 // return 1 is good, 0 is error.
-static int cmd_copy(char *dest, char *buf, int start, int end, int bufsize, int cmdsize) {
+static int cmd_copy(char *dest, const char *buf, int start, int end, int bufsize, int cmdsize) {
 	int len = cycarrtoarr(dest, cmdsize, buf, start, end, bufsize);
 	// 这里要记得 cstr 末尾的 NUL 字符
 	if (len != -1) {
@@ -238,12 +274,17 @@ static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t 
 		} else {
 			return input_can;
 		}
+	} else if (res == 3) {
+		return input_wifi;
 	} else {
 		logu_f(LOGU_ERROR, "Unknown error [02]");
 		return input_error;
 	}
 }
 
+static	char wifiscanssid[64];
+static char wifiscanpwd[64];
+static	char wifiscanip[64];
 // return 0: lm_cmd command, command which actually modifies lm_cmd* store.
 // return 1: parse failed
 // return 2: settings command
@@ -315,28 +356,68 @@ static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 			return 1;
 		}
 	} else if(cmd[0] == 'w') {
-		// TODO 在wifi的callstack没有完全释放的时候不要执行下一个命令
+		// TODO 在 wifi 的 task 没有完全释放的时候不要执行下一个命令
 		// 应该向上Log wifi busy这句话
-		if(strncmp(cmd+1, "setup", 5) == 0) {
+		if(strncmp(cmd+1, "at", 3) == 0) {
+			wifi_task_add(&hwifi, wifi_checkat);
+		} else if(strncmp(cmd+1, "auto", 5) == 0) {
 			// set up wifi
-			// 1. check "AT" twice (to remove noise input)
-			// 2. AT+CWMODE=1 setmodeclient()
-			// 3. AT+CIPMUX=0 setsingleconn()
-			// 4. AT+CIPMODE=1 setmodetrans()
-
+			// 1. Exit Send Mode
+			// 1. check "AT" (to remove noise input)
+			// 2. AT+CWMODE=1 
+			// 3. AT+CIPMUX=0
+			// 4. AT+CIPMODE=1 
+			// 5. JOIN AP
+			// 6. CONNECT TCP
+			wifi_auto_setup();
 		} else if(strncmp(cmd+1, "join", 4) == 0) {
 			// join ap
-			//
+			if(cmd[1+4] == '\0') {
+				wifi_task_add_withargs(&hwifi, wifi_joinap_args, 2, (int[]){(int)WIFI_SSID, (int)WIFI_PWD});
+			} else {
+				if(strlen(cmd) > 64) {
+					logu_s(LOGU_ERROR, "SSID and pwd are too long.");
+					return 1;
+				}
+				int scnt = sscanf(cmd+5, "%s %s", wifiscanssid, wifiscanpwd);
+				if(scnt != 2) {
+					logu_s(LOGU_ERROR, "SSID or pwd parsed failed.");
+					return 1;
+				}
+				wifi_task_add_withargs(&hwifi, wifi_joinap_args, 2, (int[]){(int)wifiscanssid, (int)wifiscanpwd});
+			}
 		} else if(strncmp(cmd+1, "tcp", 3) == 0) {
 			// tcp connect
-		} else if(strncmp(cmd+1, "trans", 5) == 0) {
-			// set transparent
-
-		} else if(strncmp(cmd+1, "dis", 3) == 0) {
+			if(cmd[1+3] == '\0') {
+				wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, 2, (int[]){(int)WIFI_TCP_IP, (int)WIFI_TCP_PORT});
+			} else {
+				if(strlen(cmd) > 64) {
+					logu_s(LOGU_ERROR, "IP and port are too long.");
+					return 1;
+				}
+				uint16_t wifiscanport;
+				int scnt = sscanf(cmd + 4, wifiscanip, &wifiscanport);
+				if(scnt != 2) {
+					logu_s(LOGU_ERROR, "IP or port parsed failed.");
+					return 1;
+				}
+				wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, 2, (int[]){(int)wifiscanip, (int)wifiscanport});
+			}
+		} else if(strncmp(cmd+1, "send", 5) == 0) {
+			// start send and set serial input into raw mode
+			wifi_task_add(&hwifi, wifi_startsend);
+			wifi_change_to_raw_when_success = 1;
+			logu_s(LOGU_WARN, "Start wifi pipe mode.");
+		} else if(strncmp(cmd+1, "drop", 5) == 0) {
 			// tcp disconnect
-		} else if(strncmp(cmd+1, "leave", 5) == 0) {
+			wifi_task_add(&hwifi, wifi_dropsingleconn);
+		} else if(strncmp(cmd+1, "leave", 6) == 0) {
 			// leave ap
+			wifi_task_add(&hwifi, wifi_leaveap);
+		} else {
+			return 1;
 		}
+		return 3;
 	} else {
 		logu_s(LOGU_ERROR, "Command parse failed");
 		return 1;
@@ -370,7 +451,52 @@ static int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir) {
 // TODO 当Wifi进入直传模式之后，先用一个缓冲区收集输入，然后在主循环里面调取解析函数
 // 解析函数可以使用
 
+Wifi_HandleTypeDef *wifi_gethandler() {
+	return &hwifi;
+}
 
+void wifi_rx_to_uart() {
+	if (hwifi.recv.idle) {
+		if (wifi_pipe_raw) {
+			logu_raw(hwifi.recv.data, hwifi.recv.len);
+			hwifi.recv.idle = 0;
+			hwifi.recv.len = 0;
+		} else {
+			logu_raw(hwifi.recv.data, hwifi.recv.len);
+			if (hwifi.callstack.len == 0) {
+				hwifi.recv.idle = 0;
+				hwifi.recv.len = 0;
+			}
+		}
+	}
+}
+
+static char wifi_greetings[50];
+void wifi_auto_setup() {
+	snprintf(wifi_greetings, 50, "Machine %hu greetings.", (uint16_t)machine_id);
+	wifi_task_add(&hwifi, wifi_stopsend);
+	wifi_task_add_withargs(&hwifi, wifi_task_delay, 1, (int[]){100});
+	wifi_task_add(&hwifi, wifi_checkat);
+	wifi_task_add(&hwifi, wifi_setmodewifi_client);
+	wifi_task_add(&hwifi, wifi_setsingleconn);
+	wifi_task_add(&hwifi, wifi_setmodetrans_unvarnished);
+	wifi_task_add_withargs(&hwifi, wifi_joinap_args, 2, (int[] ) { (int) WIFI_SSID, (int) WIFI_PWD });
+	wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, 2, (int[] ) { (int) WIFI_TCP_IP, (int) WIFI_TCP_PORT });
+	wifi_task_add(&hwifi, wifi_startsend);
+	wifi_task_add_withargs(&hwifi, wifi_send_str_args, 1, (int[] ) { (int) wifi_greetings });
+	wifi_task_add(&hwifi, wifi_checkat);
+	// TODO 最后一个任务最好是一个检测连接状态的任务。
+	// TODO 怎么做TASK失败的条件跳转？你可以在后面设置一个程序状态字寄存器，这样看上去就像虚拟机了。
+	wifi_change_to_raw_when_success = 1;
+}
+
+void wifi_tick_callback(WifiRtnState state, int index, int finished) {
+	if(finished && state == WRS_OK && wifi_change_to_raw_when_success) {
+		wifi_pipe_raw = 1;
+		wifi_change_to_raw_when_success = 0;
+	}
+	logu_f(LOGU_INFO, "wifi callback %s on index %d with finished %d.", rtntostr(state), index, finished);
+}
 
 // CAN send lm_cmd
 HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id) {

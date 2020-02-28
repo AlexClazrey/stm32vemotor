@@ -19,6 +19,7 @@
 // tick value when a main cycle starts
 static uint32_t tickstart = 0;
 
+#ifdef CYCLETICK_REPORT
 // stat report 
 static uint32_t (*cyclecountfunc)() = NULL;
 static uint32_t tickmax = 0;
@@ -26,6 +27,7 @@ static uint32_t ticksum = 0;
 
 static void recordtime(uint32_t used);
 static void reporttime();
+#endif
 
 // ---------- Time
 void cycle_tick_start() {
@@ -74,5 +76,8 @@ static void reporttime() {
 	logu_f(LOGU_DEBUG, "Cycle tick report: max: %lu, average: %lu.%lu", tickmax, p1, p2);
 	ticksum = 0;
 	tickmax = 0;
+}
+#else
+void cycle_tick_init_report(uint32_t (*cyclecount)()) {
 }
 #endif

@@ -22,3 +22,8 @@ const uint8_t CAN_CMD_STRING = 10;
 // 主循环时间设置
 const uint32_t COUNT_INTV = 10; // 每次主循环使用的毫秒数
 const uint32_t COUNT_LIMIT = 1000; // COUNT_LIMIT * COUNT_INTV / 1000 得到一个大循环使用的秒数，现在是100s。
+
+char* WIFI_SSID = "SSID";
+char* WIFI_PWD = "password";
+char* WIFI_TCP_IP = "192.168.1.100";
+uint16_t WIFI_TCP_PORT = 5577;

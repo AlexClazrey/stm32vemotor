@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "Dspin/dspin.h"
+#include "wifi8266/wifi_8266_mod.h"
 #include "config.h"
 #include "util.h"
 #include "cycletick.h"
@@ -93,8 +94,6 @@ volatile int canlen = 0;
 // main cycle
 static uint32_t main_cycle_count = 0;
 
-#define DMA_INPUT_SIZE (UART_INPUT_BUF_SIZE-1)
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -152,8 +151,8 @@ int main(void) {
 	MX_USART2_UART_Init();
 	/* USER CODE BEGIN 2 */
 	logu_init(&huart1, LOGU_DMA);
-	logu_setlevel(LOGU_DEBUG);
-//	logu_setlevel(LOGU_TRACE);
+//	logu_setlevel(LOGU_DEBUG);
+	logu_setlevel(LOGU_TRACE);
 	// motor init
 	L6470_Configuration1();
 	lm_init(plmh);
@@ -163,37 +162,50 @@ int main(void) {
 	// 初始化的过程
 	// 目前有向内移动直到 CN1 被按下这一步。
 	logu_s(LOGU_DEBUG, "Start initializing.");
-	logu_s(LOGU_DEBUG, "Moving to initial position.");
-	lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
-	if (lm_commit(plmh)) {
-		uint32_t init_tick = HAL_GetTick();
-		while (1) {
-			detect_cn1();
-			if (cn1_indicator) {
-				logu_s(LOGU_DEBUG, "Moving finished");
-				lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
-				lm_commit(plmh);
-				break;
-			} else if (HAL_GetTick() - init_tick > 10000) {
-				logu_s(LOGU_ERROR, "Moving timeout.");
-				lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
-				lm_commit(plmh);
-				break;
+	if(INIT_MOTOR_MOVE) {
+		logu_s(LOGU_DEBUG, "Moving to initial position.");
+		lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
+		if (lm_commit(plmh)) {
+			uint32_t init_tick = HAL_GetTick();
+			while (1) {
+				detect_cn1();
+				if (cn1_indicator) {
+					logu_s(LOGU_DEBUG, "Moving finished");
+					lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
+					lm_commit(plmh);
+					break;
+				} else if (HAL_GetTick() - init_tick > 10000) {
+					logu_s(LOGU_ERROR, "Moving timeout.");
+					lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
+					lm_commit(plmh);
+					break;
+				}
 			}
+		} else {
+			logu_s(LOGU_ERROR, "Reset position failed.");
 		}
 	} else {
-		logu_s(LOGU_ERROR, "Reset position failed.");
+		logu_s(LOGU_DEBUG, "Skip motor move.");
+	}
+
+	if(INIT_WIFI_SETUP) {
+		wifi_auto_setup();
 	}
 	logu_s(LOGU_DEBUG, "Initialize finished.");
 
-	// input init
-	/* Enable IDLE Interrupt with DMA circular reading */
+	// input receive kick start
+	// Enable IDLE Interrupt with DMA circular reading
 	// Must clear state before enable idle or it will lost in a dead loop
 	huart1.Instance->SR;
 	huart1.Instance->DR;
 	__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
+	HAL_UART_Receive_DMA(&huart1, (uint8_t*) inputbuf_get(), UART_INPUT_DMA_READ_RANGE);
 
-	HAL_UART_Receive_DMA(&huart1, (uint8_t*) inputbuf_get(), DMA_INPUT_SIZE);
+	// WiFi receive kick start
+	huart2.Instance->SR;
+	huart2.Instance->DR;
+	__HAL_UART_ENABLE_IT(&huart2, UART_IT_IDLE);
+	HAL_UART_Receive_DMA(&huart2, (uint8_t*)(wifi_gethandler()->recv.data), WIFI_RECV_DMA_RANGE);
 
 	// turn off LED2 after init
 	LED2_GPIO->ODR |= LED2_GPIO_PIN;
@@ -221,6 +233,11 @@ int main(void) {
 		// detect switch on CN1
 		detect_cn1();
 
+		// wifi received data to user serial
+		wifi_rx_to_uart();
+		// wifi tick
+		wifi_tick(wifi_gethandler(), wifi_tick_callback);
+
 		// can cache read
 		if (canbuf_read(&lmcan, canbuf, canlen) == 1) {
 			lm_append_cmd(plmh, (struct lm_cmd*) &lmcan);
@@ -228,7 +245,7 @@ int main(void) {
 		canlen = 0;
 
 		// read input buffer
-		inputbuf_read(plmh);
+		uart_user_inputbuf_read(plmh);
 
 		// cycle test 放在输入的位置后面
 		mcycle_cmd(plmh, main_cycle_count);
@@ -279,8 +296,10 @@ int main(void) {
 			lm_home_set = 1;
 		}
 		lm_commit(plmh);
-		// report
+		// log report
+#ifdef LOG_TXCPLT_REPORT
 		txcplt_report();
+#endif
 		// cycle count
 		main_cycle_count++;
 		if (main_cycle_count == COUNT_LIMIT) {
@@ -547,22 +566,28 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
 		logu_dma_txcplt_callback();
 	}
 }
-void txcplt_report() {
-	if (maincyclecount() % 1000 == 0) {
-		logu_f(LOGU_DEBUG, "log report: wrote %lu times in last 1000 cycles.", txcpltcount);
-		txcpltcount = 0;
-	}
-}
 void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart1) {
 		logu_s(LOGU_TRACE, "uart input buffer cycle half complete");
-		inputbuf_setend(DMA_INPUT_SIZE / 2); // half complete is copy count / 2.
+		inputbuf_setend(UART_INPUT_DMA_READ_RANGE / 2); // half complete is copy count / 2.
 	}
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart1) {
 		logu_s(LOGU_TRACE, "uart input buffer cycle complete");
 		inputbuf_setend(0);
+	} else if (huart == &huart2) {
+		logu_s(LOGU_TRACE, "wifi rx buffer cycle complete");
+		Wifi_HandleTypeDef* hwifi = wifi_gethandler();
+		hwifi->recv.idle = 1;
+		hwifi->recv.len = WIFI_RECV_DMA_RANGE;
+	}
+}
+
+void txcplt_report() {
+	if (maincyclecount() % 1000 == 0) {
+		logu_f(LOGU_DEBUG, "log report: wrote %lu times in last 1000 cycles.", txcpltcount);
+		txcpltcount = 0;
 	}
 }
 
@@ -577,12 +602,19 @@ void cmd_serial_int(UART_HandleTypeDef *huart) {
 		// error was handled by HAL, only check IDLE here.
 		if (__HAL_UART_GET_FLAG(huart, USART_SR_IDLE)) {
 			__HAL_UART_CLEAR_FLAG(huart, USART_SR_IDLE);
-			logu_f(LOGU_INVISIBLE, "uart input idle %lu", idlecount++);
+			logu_f(LOGU_TINY, "uart input idle %lu", idlecount++);
 			HAL_UART_DMAPause(huart);
 			uint32_t dmacnt = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
-			inputbuf_setend(DMA_INPUT_SIZE - dmacnt);
+			inputbuf_setend(UART_INPUT_DMA_READ_RANGE - dmacnt);
 			HAL_UART_DMAResume(huart);
 		}
+	}
+}
+
+// Interrupt Routine For WiFi IDLE
+void wifi_serial_int(UART_HandleTypeDef *huart) {
+	if (huart == &huart2) {
+		wifi_rx_idle_int(wifi_gethandler(), &hdma_usart2_rx);
 	}
 }
 

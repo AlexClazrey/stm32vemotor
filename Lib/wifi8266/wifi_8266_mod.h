@@ -5,7 +5,7 @@
 /* Configurations */
 #define WIFI_ARGV_SIZE 3
 #define WIFI_STACK_SIZE 5
-#define WIFI_TASK_SIZE 7
+#define WIFI_TASK_SIZE 20
 
 #define WIFI_RECV_BUFFER_SIZE 500
 #define WIFI_RECV_DMA_RANGE 495
@@ -77,7 +77,10 @@ struct wifi_handle {
 };
 
 const char* rtntostr(WifiRtnState state);
+
+void wifi_rx_idle_int(Wifi_HandleTypeDef *hwifi, DMA_HandleTypeDef* dmarx);
 WifiRtnState wifi_tick(Wifi_HandleTypeDef *hwifi, wifi_task_callback callback);
+
 size_t wifi_callstack_len(Wifi_HandleTypeDef *hwifi);
 int wifi_callstack_isempty(Wifi_HandleTypeDef *hwifi);
 
@@ -100,8 +103,11 @@ WifiRtnState wifi_tcpconn_args(Wifi_HandleTypeDef *hwifi, int argc, int *argv);
 WifiRtnState wifi_dropsingleconn(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_startsend(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_stopsend(Wifi_HandleTypeDef *hwifi);
+WifiRtnState wifi_task_delay(Wifi_HandleTypeDef* hwifi, int argc, int *argv);
 
 HAL_StatusTypeDef wifi_send_str(Wifi_HandleTypeDef *hwifi, const char *data);
 HAL_StatusTypeDef wifi_send_raw(Wifi_HandleTypeDef *hwifi, const char *buffer, size_t len);
+WifiRtnState wifi_send_str_args(Wifi_HandleTypeDef *hwifi, int argc, int* argv);
+WifiRtnState wifi_send_raw_args(Wifi_HandleTypeDef *hwifi, int argc, int* argv);
 
 #endif
