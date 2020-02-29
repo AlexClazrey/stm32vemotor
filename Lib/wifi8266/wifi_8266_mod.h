@@ -52,7 +52,7 @@ struct wifi_recv {
 
 typedef WifiRtnState (*wifi_taskfunc)(Wifi_HandleTypeDef *hwifi);
 typedef WifiRtnState (*wifi_taskfunc_withargs)(Wifi_HandleTypeDef *hwifi, int argc, int argv[WIFI_ARGV_SIZE]);
-typedef void (*wifi_task_callback)(WifiRtnState state, int taskindex, int taskfinished);
+typedef void (*wifi_task_callback)(Wifi_HandleTypeDef *hwifi, WifiRtnState state, int taskindex, int taskfinished);
 
 struct wifi_task_item {
     union {
@@ -61,8 +61,10 @@ struct wifi_task_item {
     };
     int argc;
     int argv[WIFI_ARGV_SIZE];
+    const char* name;
 };
 struct wifi_task {
+    const char* tasks_name;
     struct wifi_task_item tasks[WIFI_TASK_SIZE];
     uint32_t cursor;
     uint32_t len;
@@ -79,14 +81,23 @@ struct wifi_handle {
 const char* rtntostr(WifiRtnState state);
 
 void wifi_rx_idle_int(Wifi_HandleTypeDef *hwifi, DMA_HandleTypeDef* dmarx);
+const char* wifi_rx_cap(Wifi_HandleTypeDef* hwifi);
+size_t wifi_rx_cap_len(Wifi_HandleTypeDef* hwifi);
 WifiRtnState wifi_tick(Wifi_HandleTypeDef *hwifi, wifi_task_callback callback);
 
 size_t wifi_callstack_len(Wifi_HandleTypeDef *hwifi);
 int wifi_callstack_isempty(Wifi_HandleTypeDef *hwifi);
 
+void wifi_task_setlistname(Wifi_HandleTypeDef *hwifi, const char* name);
+const char* wifi_task_getlistname(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_task_add(Wifi_HandleTypeDef *hwifi, wifi_taskfunc taskfunc);
-WifiRtnState wifi_task_add_withargs(Wifi_HandleTypeDef *hwifi, wifi_taskfunc_withargs taskfunc, int argc, int argv[WIFI_ARGV_SIZE]);
+WifiRtnState wifi_task_add_withname(Wifi_HandleTypeDef *hwifi, wifi_taskfunc taskfunc, const char* name);
+WifiRtnState wifi_task_add_withargs(Wifi_HandleTypeDef *hwifi, wifi_taskfunc_withargs taskfunc, const char* name, int argc, int argv[WIFI_ARGV_SIZE]);
+const char* wifi_task_getitemname(Wifi_HandleTypeDef* hwifi, uint32_t index);
+void wifi_task_clear(Wifi_HandleTypeDef *hwifi);
 size_t wifi_task_len(Wifi_HandleTypeDef *hwifi);
+int wifi_task_isempty(Wifi_HandleTypeDef *hwifi);
+size_t wifi_task_remains(Wifi_HandleTypeDef *hwifi);
 int wifi_task_isfinished(Wifi_HandleTypeDef *hwifi);
 
 WifiRtnState wifi_checkat(Wifi_HandleTypeDef *hwifi);
@@ -98,7 +109,7 @@ WifiRtnState wifi_scanap(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_setsingleconn(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_setmodetrans_unvarnished(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_setmodetrans_normal(Wifi_HandleTypeDef *hwifi);
-WifiRtnState wifi_tcpconn(Wifi_HandleTypeDef *hwifi, char *ip, uint16_t port);
+WifiRtnState wifi_tcpconn(Wifi_HandleTypeDef *hwifi, const char *ip, uint16_t port);
 WifiRtnState wifi_tcpconn_args(Wifi_HandleTypeDef *hwifi, int argc, int *argv);
 WifiRtnState wifi_dropsingleconn(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_startsend(Wifi_HandleTypeDef *hwifi);

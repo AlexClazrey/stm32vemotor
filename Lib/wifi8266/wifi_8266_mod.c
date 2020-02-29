@@ -31,13 +31,16 @@
  在 struct wifi_stack 的异步化结构外，还有一层结构 struct wifi_task 。
  这层结构保存AT指令的队列信息。
  在 tick 的回调函数里面，
- 第一个参数是AT指令的结果，
- 第二个参数是目前返回结果的 task 序号，如果没有使用 task 系统那么是 -1 。
- 第三个参数是 task 队列是否全部完成的 bool ，如果没有使用 task 系统那么是 1。
+ 第一个参数是 struct wifi_handler 对象自己，
+ 第二个参数是AT指令的结果，
+ 第三个参数是目前返回结果的 task 序号，如果没有使用 task 系统那么是 -1 ，
+ 第四个参数是 task 队列是否全部完成的 bool ，如果没有使用 task 系统那么是1/True。
  一个 task 失败不会终止后续的 task 执行，如果想要中止，那么在回调函数里面使用 wifi_task_clear ，
  因为回调函数在后续的 task 开始之前被触发。
 
- ESP-01 模块的功能在透传开启的时候，收到的TCP数据会直接输出，透传关闭的时候会有连接说明加输出。 
+ task序列和单独的task项目都可以设置名字，用这个在回调函数里面可以分辨来源，如果没有使用那么都是NULL。
+
+ ESP-01 模块的功能在透传开启的时候，收到的TCP数据会直接输出，透传关闭的时候收到数据会有 +IPD,<len>:<data> 。 
  关闭传输模式的语句 "+++" 和其他信息之间至少间隔100ms，在task队列里面使用wifi_task_delay函数可以做到延时。
 
  速记：
@@ -46,6 +49,8 @@
  不使用 task 队列发起AT指令只要调用对应的函数就行。
  使用 task 队列的话调用 wifi_task_add 或者 wifi_task_add_withargs 添加任务。
  在使用 wifi_startsend 开启传输之后 wifi_send_raw/str 可以写入数据，完成之后使用 wifi_stopsend 退出传输模式。
+ 在 wifi_tick 之前调用 wifi_rx_cap 函数可以得到原始的接受字符串。
+ wifi_tick 不会把接受到的数据保留到下一次 wifi_tick 里面使用。
 
  */
 
@@ -60,7 +65,7 @@
  如果=0那么TCP和WIFI事件都会有输出。
  3.	连接 WiFi 的时候有一定机率引发它一直处于BUSY状态很久很久很久几千秒也不会停。
  它不会相应任何新的AT指令，全都返回busy，我没法中断连接。
- 所以这种情况也要 HARD RESET 。
+ 所以这种情况也要 RESET ，我不知道 AT+RESET 有没有用。
  看起来真的很需要一个GPIO单独连接到RESET上。
  4.	在 Reset 之后最后的输出也不一定是 ready\r\n 才能表示正常启动，关键判别在于AT有反应。
  这可能要几次 RESET ，网上说这是因为ESP8266的电源要求很高，要很稳定。
@@ -142,6 +147,18 @@ void wifi_rx_idle_int(Wifi_HandleTypeDef *hwifi, DMA_HandleTypeDef* dmarx) {
     }
 }
 
+/* ---- Wifi Rx Functions ---- */
+const char* wifi_rx_cap(Wifi_HandleTypeDef* hwifi) {
+    if(hwifi->recv.idle) {
+        hwifi->recv.data[hwifi->recv.len] = 0;
+        return hwifi->recv.data;
+    }
+    return NULL;
+}
+size_t wifi_rx_cap_len(Wifi_HandleTypeDef* hwifi) {
+    return hwifi->recv.idle ? hwifi->recv.len : 0;
+}
+
 /* ---- Wifi Callstack Frame Functions ---- */
 static int wifi_tick_frame_go_on(Wifi_HandleTypeDef *hwifi, struct wifi_stack_item *sti, WifiRtnState *out_result);
 static int wifi_tick_frame_timeout(Wifi_HandleTypeDef *hwifi, struct wifi_stack_item *sti, WifiRtnState *out_result);
@@ -161,8 +178,11 @@ WifiRtnState wifi_tick(Wifi_HandleTypeDef *hwifi, wifi_task_callback callback) {
 static WifiRtnState wifi_tick_p1(Wifi_HandleTypeDef *hwifi) {
     struct wifi_stack *st = &hwifi->callstack;
     // 这是为了加速，没有这句判断一样能运行
-    if (st->len == 0)
+    if (st->len == 0) {
+        hwifi->recv.idle = 0;
+        hwifi->recv.len = 0;
         return WRS_PASS;
+    }
     WifiRtnState subroutine;
     WifiRtnState result = WRS_PASS;
     // 先从外向内扫描是不是完成
@@ -198,7 +218,7 @@ static WifiRtnState wifi_tick_p1(Wifi_HandleTypeDef *hwifi) {
     }
     // assert 一些不该发生的情况
     if (result != WRS_PASS && !wifi_callstack_isempty(hwifi)) {
-        logu_s(LOGU_ERROR, "THIS IS A BUG. Wifi tick returns while wifi callstack is not empty.");
+        logu_s(LOGU_ERROR, "BUG. Wifi tick returns while wifi callstack is not empty.");
     }
     return result;
 }
@@ -223,11 +243,12 @@ static WifiRtnState wifi_tick_p2(Wifi_HandleTypeDef *hwifi, wifi_task_callback c
     // 如果有返回的结果，并且task队列已完成，那么需要清空队列信息。
     if (result != WRS_PASS) {
         // 在不使用task队列功能的时候cursor应该是0。
-        callback(result, hwifi->task.cursor - 1, wifi_task_isfinished(hwifi));
+        callback(hwifi, result, hwifi->task.cursor - 1, wifi_task_isfinished(hwifi));
         if (wifi_task_isfinished(hwifi)) {
             wifi_task_clear(hwifi);
         }
     }
+
     return result;
 }
 
@@ -305,11 +326,15 @@ int wifi_callstack_isempty(Wifi_HandleTypeDef *hwifi) {
 
 /* ---- Task Functions ---- */
 WifiRtnState wifi_task_add(Wifi_HandleTypeDef *hwifi, wifi_taskfunc taskfunc) {
-    return wifi_task_add_withargs(hwifi, (wifi_taskfunc_withargs) taskfunc, 0, NULL);
+    return wifi_task_add_withargs(hwifi, (wifi_taskfunc_withargs) taskfunc, NULL, 0, NULL);
 }
 
-WifiRtnState wifi_task_add_withargs(Wifi_HandleTypeDef *hwifi, wifi_taskfunc_withargs taskfunc, int argc,
-        int argv[WIFI_ARGV_SIZE]) {
+WifiRtnState wifi_task_add_withname(Wifi_HandleTypeDef *hwifi, wifi_taskfunc taskfunc, const char* name) {
+    return wifi_task_add_withargs(hwifi, (wifi_taskfunc_withargs) taskfunc, name, 0, NULL);
+}
+
+WifiRtnState wifi_task_add_withargs(Wifi_HandleTypeDef *hwifi, wifi_taskfunc_withargs taskfunc,
+        const char* name, int argc, int argv[WIFI_ARGV_SIZE]) {
     if (argc > WIFI_ARGV_SIZE) {
         return WRS_ERROR;
     }
@@ -321,10 +346,27 @@ WifiRtnState wifi_task_add_withargs(Wifi_HandleTypeDef *hwifi, wifi_taskfunc_wit
     pti->argsfunc = taskfunc;
     pti->argc = argc;
     memcpy(pti->argv, argv, argc * sizeof(int));
+    pti->name = name;
     return WRS_OK;
 }
 
+const char* wifi_task_getitemname(Wifi_HandleTypeDef* hwifi, uint32_t index) {
+    if(index >= hwifi->task.len) 
+        return NULL;
+    else
+        return hwifi->task.tasks[index].name;
+}
+
+void wifi_task_setlistname(Wifi_HandleTypeDef *hwifi, const char* name) {
+    hwifi->task.tasks_name = name;
+}
+
+const char* wifi_task_getlistname(Wifi_HandleTypeDef *hwifi) {
+    return hwifi->task.tasks_name;
+}
+
 void wifi_task_clear(Wifi_HandleTypeDef *hwifi) {
+    hwifi->task.tasks_name = NULL;
     hwifi->task.len = 0;
     hwifi->task.cursor = 0;
 }
@@ -461,7 +503,7 @@ WifiRtnState wifi_setmodetrans_normal(Wifi_HandleTypeDef *hwifi) {
 static WifiRtnState wifi_tcpconn_2(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine);
 char connbuf[100];
 // 这个也很奇特，命令和参数必须分开时间发送。
-WifiRtnState wifi_tcpconn(Wifi_HandleTypeDef *hwifi, char *ip, uint16_t port) {
+WifiRtnState wifi_tcpconn(Wifi_HandleTypeDef *hwifi, const char *ip, uint16_t port) {
     const char *inst = "AT+CIPSTART=";
     size_t len = snprintf(connbuf, 100, "\"TCP\",\"%s\",%hu\r\n", ip, port);
     if (len < 0 || len >= 100)

@@ -10,8 +10,9 @@ void inputbuf_setend(uint32_t end);
 
 Wifi_HandleTypeDef *wifi_gethandler();
 void wifi_rx_to_uart();
-void wifi_auto_setup();
-void wifi_tick_callback(WifiRtnState state, int index, int finished);
+void wifi_autosetup_tasklist();
+void wifi_greet_1();
+void wifi_tick_callback(Wifi_HandleTypeDef* phwifi, WifiRtnState state, int index, int finished);
 
 HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id);
 int canbuf_read(struct lm_cmd *dest, char *data, size_t len);

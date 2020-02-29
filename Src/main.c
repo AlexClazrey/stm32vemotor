@@ -189,7 +189,7 @@ int main(void) {
 	}
 
 	if (INIT_WIFI_SETUP) {
-		wifi_auto_setup();
+		wifi_autosetup_tasklist();
 	}
 	logu_s(LOGU_DEBUG, "Initialize finished.");
 
@@ -235,8 +235,12 @@ int main(void) {
 
 		// wifi received data to user serial
 		wifi_rx_to_uart();
+		//  TODO trying parse wifi received data as a command
+
 		// wifi tick
 		wifi_tick(wifi_gethandler(), wifi_tick_callback);
+		// wifi greets every ten second
+		wifi_greet_1();
 
 		// can cache read
 		if (canbuf_read(&lmcan, canbuf, canlen) == 1) {
@@ -587,8 +591,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart1)
 		led2_blink = 200;
-	else if (huart == &huart2)
-		led2_blink = 50;
+	else if (huart == &huart2) {
+		logu_s(LOGU_ERROR, "WiFi UART port Rx/Tx error.");
+		led2_blink = 25;
+	}
 }
 
 void txcplt_report() {
