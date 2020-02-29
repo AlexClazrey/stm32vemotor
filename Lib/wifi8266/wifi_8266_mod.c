@@ -48,15 +48,18 @@
  在 stm32f1xx_it.c 里面收到 IDLE 中断的时候调用 wifi_rx_idle_int 。
  不使用 task 队列发起AT指令只要调用对应的函数就行。
  使用 task 队列的话调用 wifi_task_add 或者 wifi_task_add_withargs 添加任务。
- 在使用 wifi_startsend 开启传输之后 wifi_send_raw/str 可以写入数据，完成之后使用 wifi_stopsend 退出传输模式。
+ 如果使用 wifi_setmodetrans_unvarnished 切换到了透传模式的话，
+ 在使用 wifi_startsend_unvarnished 开启传输之后 wifi_send_raw/str 可以写入数据，
+ 完成之后使用 wifi_stopsend_unvarnished 退出传输模式。
  在 wifi_tick 之前调用 wifi_rx_cap 函数可以得到原始的接受字符串。
- wifi_tick 不会把接受到的数据保留到下一次 wifi_tick 里面使用。
+ 每个周期的 wifi_tick 不会把接受到的数据保留到下一次 wifi_tick 里面使用。
 
  */
 
 /*
  ======= ISSUES =======
- 1. ESP8266 太长时间的放置之后还会没反应那，这怎么办呢？还要定期AT一下吗？如果没反应就HARD RESET？
+ 1. ESP8266 太长时间的放置之后还会没反应那，这怎么办呢？
+ 还要定期AT一下吗？如果没反应就HARD RESET？
  而且这种时候我手工 HARD RESET 多次才有用。
  2. 某些时刻，在发生外部事件的时候，
  会有 WIFI CONNECTED / WIFI GOT IP / WIFI DISCONNECT 这样的字符输出；
@@ -71,6 +74,7 @@
  这可能要几次 RESET ，网上说这是因为ESP8266的电源要求很高，要很稳定。
  但是在单独的试验电路里面我加了2000uF的固态电容就没事了。
  最好单片机初始化的时候就RESET试试。
+ 5. 如果收到数据的时候又在执行一堆指令，这样好像也会让 ESP8266 有机率死机需要 HARD RESET 。
 
  */
 
@@ -112,8 +116,8 @@ static inline int checkerror(const char *str) {
 static inline int checkbusy(const char *str) {
     return strhas(str, RTNBUSY);
 }
-static inline int UNUSED_ATTRIB checkhasrecv(struct wifi_recv *recv, const char *target) {
-    return strhas(recv->data, target);
+static inline int UNUSED_ATTRIB checkhasrecv(Wifi_HandleTypeDef* hwifi, const char *target) {
+    return strhas(hwifi->recv.data, target);
 }
 static inline WifiRtnState recvstrsignal(const char *str) {
     return checkok(str) ? WRS_OK : checkerror(str) ? WRS_ERROR : checkbusy(str) ? WRS_BUSY : WRS_INVALID;
@@ -536,7 +540,52 @@ WifiRtnState wifi_dropsingleconn(Wifi_HandleTypeDef *hwifi) {
     return WRS_OK;
 }
 
-WifiRtnState wifi_startsend(Wifi_HandleTypeDef *hwifi) {
+WifiRtnState wifi_send_normal_2(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine, int argc, int* argv); 
+WifiRtnState wifi_send_normal_3(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine, int argc, int* argv);
+WifiRtnState wifi_send_normal_4(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine); 
+// ESP8266 的普通模式发送不太稳定，透传模式发送问题更少。所以不建议使用这个函数。
+WifiRtnState wifi_send_normal(Wifi_HandleTypeDef *hwifi, const char* data, uint16_t len) {
+	const char *inst = "AT+CIPSEND=";
+    HAL_StatusTypeDef sent = wifi_send_str(hwifi, inst);
+    CHECKSENT;
+    wifi_frame_add_withargs(hwifi, wifi_send_normal_2, HAL_GetTick() + TIMEOUTSHORT, NULL, 2, (int[]){(int)data, (int)len});
+    return WRS_OK;
+}
+// argc = 2, argv[0] = <data>, argv[1] = <len> 
+// ESP8266 的普通模式发送不太稳定，透传模式发送问题更少。所以不建议使用这个函数。
+WifiRtnState wifi_send_normal_args(Wifi_HandleTypeDef *hwifi, int argc, int* argv) {
+    if(argc != 2)
+        return WRS_ERROR;
+    return wifi_send_normal(hwifi, (const char*)argv[0], (uint16_t)argv[1]);
+}
+WifiRtnState wifi_send_normal_2(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine, int argc, int* argv) {
+	THROWTIMEOUT;
+    if(argc != 2)
+        return WRS_ERROR;
+    char buf[10];
+    snprintf(buf, 10, "%hu\r\n", (uint16_t)argv[1]);
+    HAL_StatusTypeDef sent = wifi_send_str(hwifi, buf);
+    CHECKSENT;
+    wifi_frame_add_withargs(hwifi, wifi_send_normal_3, HAL_GetTick() + TIMEOUTSHORT, NULL, 1, (int[]){(int)argv[0]});
+    return WRS_OK;
+}
+WifiRtnState wifi_send_normal_3(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine, int argc, int* argv) {
+    THROWTIMEOUT;
+    if(argc != 1)
+        return WRS_ERROR;
+    if(!checkhasrecv(hwifi, ">"))
+        return WRS_ERROR;
+    HAL_StatusTypeDef sent = wifi_send_str(hwifi, (char*)argv[0]);
+    CHECKSENT;
+    wifi_frame_add(hwifi, wifi_send_normal_4, HAL_GetTick() + TIMEOUTSHORT, wifi_trigger_atsignal);
+    return WRS_OK;
+}
+WifiRtnState wifi_send_normal_4(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine) {
+    return checkhasrecv(hwifi, "SEND OK\r\n") ? WRS_OK : checkhasrecv(hwifi, "SEND ERROR\r\n") ? WRS_ERROR : WRS_INVALID;
+}
+
+
+WifiRtnState wifi_startsend_unvarnished(Wifi_HandleTypeDef *hwifi) {
     const char *inst = "AT+CIPSEND\r\n";
     HAL_StatusTypeDef sent = wifi_send_str(hwifi, inst);
     CHECKSENT;
@@ -544,7 +593,7 @@ WifiRtnState wifi_startsend(Wifi_HandleTypeDef *hwifi) {
     return WRS_OK;
 }
 
-WifiRtnState wifi_stopsend(Wifi_HandleTypeDef *hwifi) {
+WifiRtnState wifi_stopsend_unvarnished(Wifi_HandleTypeDef *hwifi) {
     const char *inst = "+++";
     HAL_StatusTypeDef sent = wifi_send_str(hwifi, inst);
     CHECKSENT;

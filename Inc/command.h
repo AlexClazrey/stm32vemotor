@@ -12,6 +12,7 @@ Wifi_HandleTypeDef *wifi_gethandler();
 void wifi_rx_to_uart();
 void wifi_autosetup_tasklist();
 void wifi_greet_1();
+void wifi_parse_cmd(struct lm_handle* plmh);
 void wifi_tick_callback(Wifi_HandleTypeDef* phwifi, WifiRtnState state, int index, int finished);
 
 HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id);

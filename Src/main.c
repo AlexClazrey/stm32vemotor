@@ -235,8 +235,8 @@ int main(void) {
 
 		// wifi received data to user serial
 		wifi_rx_to_uart();
-		//  TODO trying parse wifi received data as a command
-
+		// try to parse wifi received data as a command
+		wifi_parse_cmd(plmh);
 		// wifi tick
 		wifi_tick(wifi_gethandler(), wifi_tick_callback);
 		// wifi greets every ten second
