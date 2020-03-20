@@ -76,7 +76,8 @@ enum cmdfrom {
 /* Functions */
 // ------------- Input Buffer Process
 static void input_feedback(enum cmdfrom from, int success);
-static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint32_t *startindex, uint32_t endindex, struct lm_handle *plmh, enum cmdfrom from, int suppress_error);
+static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint32_t *startindex, uint32_t endindex,
+		struct lm_handle *plmh, enum cmdfrom from, int suppress_error);
 static int cmd_copy(char *dest, const char *buf, int start, int end, int bufsize, int cmdsize);
 static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t *out_recevier);
 static HAL_StatusTypeDef can_send_feedback(enum cmdfrom from, HAL_StatusTypeDef send_res);
@@ -123,8 +124,9 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 				logu_s(LOGU_WARN, "Stop reading input due to full lm_cmd queue");
 				return;
 			}
-			enum inputcmdtype type = inputbuf_read_one_cmd_and_action(inputbuf_get(), (uint32_t*)&inputstart, inputend, plmhandle, CMD_FROM_SERIAL, 0);
-			if(type == input_empty)
+			enum inputcmdtype type = inputbuf_read_one_cmd_and_action(inputbuf_get(), (uint32_t*) &inputstart, inputend,
+					plmhandle, CMD_FROM_SERIAL, 0);
+			if (type == input_empty)
 				break;
 		}
 	}
@@ -138,8 +140,10 @@ void inputbuf_setend(uint32_t end) {
 	inputend = end;
 }
 
-static enum inputcmdtype inputbuf_read_one_cmd(const char *src, uint32_t *startindex, uint32_t endindex, struct lm_cmd *out_pcmd, uint8_t *out_receiver);
-static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint32_t *startindex, uint32_t endindex, struct lm_handle *plmh, enum cmdfrom from, int suppress_error) {
+static enum inputcmdtype inputbuf_read_one_cmd(const char *src, uint32_t *startindex, uint32_t endindex,
+		struct lm_cmd *out_pcmd, uint8_t *out_receiver);
+static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint32_t *startindex, uint32_t endindex,
+		struct lm_handle *plmh, enum cmdfrom from, int suppress_error) {
 	struct lm_cmd cmd = { 0 };
 	uint8_t receiver = 0;
 
@@ -147,7 +151,7 @@ static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint3
 
 	if (type == input_error) {
 		// Error details was printed in parse function
-		if(!suppress_error) {
+		if (!suppress_error) {
 			input_feedback(from, false);
 		}
 	} else if (type == input_empty) {
@@ -173,7 +177,8 @@ static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint3
 	return type;
 }
 
-static enum inputcmdtype inputbuf_read_one_cmd(const char *src, uint32_t* startindex, uint32_t endindex, struct lm_cmd *out_pcmd, uint8_t *out_receiver) {
+static enum inputcmdtype inputbuf_read_one_cmd(const char *src, uint32_t *startindex, uint32_t endindex,
+		struct lm_cmd *out_pcmd, uint8_t *out_receiver) {
 	uint32_t cursor = *startindex;
 	int triggered = 0;
 	while (cursor != endindex) {
@@ -209,7 +214,7 @@ static enum inputcmdtype inputbuf_read_one_cmd(const char *src, uint32_t* starti
 	}
 }
 
-static void wifi_send_tasklist(const char* str, int normalmode);
+static void wifi_send_tasklist(const char *str, int normalmode);
 static void input_feedback(enum cmdfrom from, int success) {
 	if (from == CMD_FROM_SERIAL) {
 		if (success) {
@@ -218,7 +223,7 @@ static void input_feedback(enum cmdfrom from, int success) {
 			logu_raw("<FAIL>\r\n", 8);
 		}
 	} else if (from == CMD_FROM_WIFI) {
-		if(success) {
+		if (success) {
 			wifi_send_tasklist("<OK>\r\n", 0);
 		} else {
 			wifi_send_tasklist("<FAIL>\r\n", 0);
@@ -234,7 +239,7 @@ static HAL_StatusTypeDef can_send_feedback(enum cmdfrom from, HAL_StatusTypeDef 
 			logu_f(LOGU_ERROR, "CAN Send failed.");
 		}
 	} else if (from == CMD_FROM_WIFI) {
-		if(send_res == HAL_OK) {
+		if (send_res == HAL_OK) {
 			wifi_send_tasklist("CAN Send OK.\r\n", 0);
 		} else {
 			wifi_send_tasklist("CAN Send Failed.\r\n", 0);
@@ -474,21 +479,22 @@ static int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir) {
 // WiFi receive
 // 先用一个缓冲区收集输入，然后在主循环里面调取解析函数
 // 解析函数可以使用 inputbuf_read_one_cmd
-void wifi_parse_cmd(struct lm_handle* plmh) {
-	const char* cmd = wifi_rx_cap(&hwifi);
-	if(cmd == NULL)
+void wifi_parse_cmd(struct lm_handle *plmh) {
+	const char *cmd = wifi_rx_cap(&hwifi);
+	if (cmd == NULL)
 		return;
-	const char* ipdstr = strstr(cmd, "\r\n+IPD,");
-	if(ipdstr != NULL) {
-		const char* s1 = strchr(ipdstr, ':');
-		if(s1 == NULL) {
+	const char *ipdstr = strstr(cmd, "\r\n+IPD,");
+	if (ipdstr != NULL) {
+		const char *s1 = strchr(ipdstr, ':');
+		if (s1 == NULL) {
 			logu_f(LOGU_ERROR, "WiFi received an invalid data: %s", cmd);
 			return;
 		}
 		int startindex = s1 - cmd + 1;
-		enum inputcmdtype type = inputbuf_read_one_cmd_and_action(cmd, (uint32_t*)&startindex, wifi_rx_cap_len(&hwifi), plmh, CMD_FROM_WIFI, 1);
-		if(type != input_empty)
-			logu_f(LOGU_DEBUG, "WiFi received command type: %d", (int)type);
+		enum inputcmdtype type = inputbuf_read_one_cmd_and_action(cmd, (uint32_t*) &startindex, wifi_rx_cap_len(&hwifi),
+				plmh, CMD_FROM_WIFI, 1);
+		if (type != input_empty)
+			logu_f(LOGU_DEBUG, "WiFi received command type: %d", (int) type);
 	}
 }
 
@@ -560,14 +566,15 @@ void wifi_greet_1() {
 }
 
 static const char *wifi_send_tasklist_name = "Standalone send";
-static void wifi_send_tasklist(const char* str, int normalmode) {
-	if(wifi_task_isempty(&hwifi) && wifi_task_getlistname(&hwifi) == NULL) {
+static void wifi_send_tasklist(const char *str, int normalmode) {
+	if (wifi_task_isempty(&hwifi) && wifi_task_getlistname(&hwifi) == NULL) {
 		wifi_task_setlistname(&hwifi, wifi_send_tasklist_name);
 	}
-		wifi_task_add(&hwifi, wifi_checkat);
-	if(normalmode) {
+	wifi_task_add(&hwifi, wifi_checkat);
+	if (normalmode) {
 		// have a chance to fail
-		wifi_task_add_withargs(&hwifi, wifi_send_normal_args, wifi_startsend_taskname, 2, (int[]){(int)str, (int)strlen(str)});
+		wifi_task_add_withargs(&hwifi, wifi_send_normal_args, wifi_startsend_taskname, 2, (int[] ) { (int) str,
+						(int) strlen(str) });
 	} else {
 		wifi_task_add(&hwifi, wifi_setmodetrans_unvarnished);
 		wifi_task_add_withname(&hwifi, wifi_startsend_unvarnished, wifi_startsend_taskname);
@@ -576,7 +583,7 @@ static void wifi_send_tasklist(const char* str, int normalmode) {
 		wifi_task_add(&hwifi, wifi_stopsend_unvarnished);
 		wifi_task_add(&hwifi, wifi_setmodetrans_normal);
 	}
-		wifi_task_add(&hwifi, wifi_checkat);
+	wifi_task_add(&hwifi, wifi_checkat);
 }
 
 void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int index, int finished) {
@@ -611,7 +618,7 @@ void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int inde
 			wifi_task_clear(phwifi);
 		}
 	} else if (tasksname == wifi_send_tasklist_name) {
-		if(state != WRS_OK) {
+		if (state != WRS_OK) {
 			logu_s(LOGU_ERROR, "WiFi send task list failed");
 			wifi_task_clear(phwifi);
 		}
