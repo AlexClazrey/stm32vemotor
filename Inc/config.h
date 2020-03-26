@@ -5,8 +5,9 @@
 /* 以下是设置项目，在config.c里还有一部分 Configurations Start */
 
 #define INIT_MOTOR_MOVE 0
+#define INIT_WIFI_CONNECT 1
 
-#define INIT_WIFI_SETUP 1
+#define WIFI_ENABLE 0
 
 // 串口
 // 考虑到 115200 11.5B/ms 那么一个主循环的约10ms不会超过140B

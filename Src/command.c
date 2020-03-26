@@ -3,9 +3,15 @@
 #include "cycletick.h"
 #include "log_uart.h"
 #include "can_io.h"
+#include "led.h"
+
 #include "DSpin/dspin.h"
-#include "wifi8266/wifi_8266_mod.h"
 #include "main.h"
+
+#if WIFI_ENABLE == 1
+#include "wifi8266/wifi_8266_mod.h"
+#endif
+
 #include <string.h>
 #include <stdio.h>
 
@@ -31,11 +37,13 @@ extern const uint8_t CAN_CMD_VER;
 extern const uint8_t CAN_CMD_LM;
 extern const uint8_t CAN_CMD_STRING;
 
+#if WIFI_ENABLE == 1
 // WIFI 连接设置
 extern char *WIFI_SSID;
 extern char *WIFI_PWD;
 extern char *WIFI_TCP_IP;
 extern uint16_t WIFI_TCP_PORT;
+#endif
 
 #ifndef UART_INPUT_BUF_SIZE 
 #define UART_INPUT_BUF_SIZE 300
@@ -57,12 +65,14 @@ static volatile int inputend = 0;
 // cmd parse buffer
 static char cmdbuf[cmd_length_limit + 1] = { 0 }; // 这个只会在主循环里面parse，所以不需要volatile
 
+#if WIFI_ENABLE == 1
 // WiFi
 // 这里写得丑了一点强行引用
 extern UART_HandleTypeDef huart2;
 static Wifi_HandleTypeDef hwifi = { .huart = &huart2 };
 static int wifi_change_to_raw_when_success = 0;
 static int wifi_pipe_raw = 0;
+#endif
 
 // motor cycle test
 static int lm_cycle = 0; // 循环测试开启指示
@@ -95,6 +105,7 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 	// 发送很多个CAN指令也可能消耗很多时间，所以这里还需要在Parse一个新的命令之前注意检查时间，
 	// 如果时间不多了那么就留到下一个循环处理。
 
+#if WIFI_ENABLE == 1
 	if (wifi_pipe_raw) {
 		// 如果开启WIFI透传，那么把用户在串口上的输入直接写入WIFI
 		// 同时给出 Echo
@@ -119,6 +130,7 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 			logu_raw(src, len);
 		}
 	} else {
+#endif
 		while (cycle_tick_now() < 8) {
 			if (!lm_hasspace(plmhandle)) {
 				logu_s(LOGU_WARN, "Stop reading input due to full lm_cmd queue");
@@ -129,7 +141,9 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 			if (type == input_empty)
 				break;
 		}
+#if WIFI_ENABLE == 1
 	}
+#endif
 }
 
 char* inputbuf_get() {
@@ -315,9 +329,12 @@ static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t 
 	}
 }
 
+#if WIFI_ENABLE==1
 static char wifiscanssid[64];
 static char wifiscanpwd[64];
 static char wifiscanip[64];
+#endif
+
 // return 0: lm_cmd command, command which actually modifies lm_cmd* store.
 // return 1: parse failed
 // return 2: settings command
@@ -389,6 +406,7 @@ static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 			return 1;
 		}
 	} else if (cmd[0] == 'w') {
+#if WIFI_ENABLE==1
 		// TODO 在 wifi 的 task 没有完全释放的时候不要执行下一个命令
 		// 应该向上Log wifi busy这句话
 		if (strncmp(cmd + 1, "at", 3) == 0) {
@@ -447,6 +465,24 @@ static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 			return 1;
 		}
 		return 3;
+#else
+		logu_s(LOGU_ERROR, "Command parse failed, Wifi module is disabled.");
+		return 1;
+#endif
+
+	} else if (strncmp(cmd, "led", 3) == 0) {
+		uint16_t r, g, b;
+		int scnt = sscanf(cmd + 3, "%hu%hu%hu", &r, &g, &b);
+		if(scnt != 3) {
+			logu_s(LOGU_ERROR, "Led brightness parse failed.");
+			return 1;
+		}
+		if(r > 255 || g > 255 || b > 255) {
+			logu_s(LOGU_ERROR, "Led brightness too high.");
+			return 1;
+		}
+		led_set((uint8_t)r, (uint8_t)g, (uint8_t)b);
+		return 2;
 	} else {
 		logu_s(LOGU_ERROR, "Command parse failed");
 		return 1;
@@ -475,6 +511,8 @@ static int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir) {
 	*out_dir = dir;
 	return 2;
 }
+
+#if WIFI_ENABLE ==1 
 
 // WiFi receive
 // 先用一个缓冲区收集输入，然后在主循环里面调取解析函数
@@ -627,6 +665,10 @@ void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int inde
 	if (finished)
 		logu_f(LOGU_INFO, "WiFi task list %s finished", tasksname);
 }
+#else
+static void wifi_send_tasklist(const char *str, int normalmode) {
+}
+#endif
 
 // CAN send lm_cmd
 HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id) {

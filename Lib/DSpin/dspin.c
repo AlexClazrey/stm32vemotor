@@ -79,15 +79,15 @@ void L6470_Configuration1(void) {
 	/* 减速率的设置为466 steps/s2，范围14.55至59590 steps/s2 */
 	dSPIN_RegsStruct.DEC = AccDec_Steps_to_Par(800);										//466);
 	/* 最大速度设置为488步/秒，最大速度设置范围为15.25至15610步/秒*/
-	dSPIN_RegsStruct.MAX_SPEED = MaxSpd_Steps_to_Par(500);
+	dSPIN_RegsStruct.MAX_SPEED = MaxSpd_Steps_to_Par(600);
 	/* 最小速度设置为0步/秒，取值范围为0至976.3，步骤/秒*/
 	dSPIN_RegsStruct.MIN_SPEED = MinSpd_Steps_to_Par(0);
 	/* 全步进速度设置252步/秒，范围为7.63到15625步/秒*/
 	dSPIN_RegsStruct.FS_SPD = FSSpd_Steps_to_Par(400);										//252);
 	/*保持占空比（转矩）设定为10％，范围在0到99.6％*/
-	dSPIN_RegsStruct.KVAL_HOLD = Kval_Perc_to_Par(5);
+	dSPIN_RegsStruct.KVAL_HOLD = Kval_Perc_to_Par(25);
 	/* 运行占空比（转矩）设定为10％，范围在0到99.6％*/
-	dSPIN_RegsStruct.KVAL_RUN = Kval_Perc_to_Par(15);
+	dSPIN_RegsStruct.KVAL_RUN = Kval_Perc_to_Par(25);
 	/* 加速的占空比（转矩）设定为10％，范围在0到99.6％*/
 	dSPIN_RegsStruct.KVAL_ACC = Kval_Perc_to_Par(15);
 	/* 减速的占空比（转矩）设定为10％，范围在0到99.6％ */

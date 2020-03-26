@@ -26,7 +26,6 @@
 #include <string.h>
 #include <stdio.h>
 #include "Dspin/dspin.h"
-#include "wifi8266/wifi_8266_mod.h"
 #include "config.h"
 #include "util.h"
 #include "cycletick.h"
@@ -35,6 +34,11 @@
 #include "can_io.h"
 #include "command.h"
 #include "led.h"
+
+#if WIFI_ENABLE==1
+#include "wifi8266/wifi_8266_mod.h"
+#endif
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -57,7 +61,7 @@ CAN_HandleTypeDef hcan;
 
 SPI_HandleTypeDef hspi1;
 
-TIM_HandleTypeDef htim6;
+TIM_HandleTypeDef htim1;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
@@ -107,7 +111,7 @@ static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_CAN_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_TIM6_Init(void);
+static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 void detect_cn1();
 void can_rx_int(uint8_t *data, uint8_t len);
@@ -153,7 +157,7 @@ int main(void) {
 	MX_USART1_UART_Init();
 	MX_CAN_Init();
 	MX_USART2_UART_Init();
-	MX_TIM6_Init();
+	MX_TIM1_Init();
 	/* USER CODE BEGIN 2 */
 	logu_init(&huart1, LOGU_DMA);
 //	logu_setlevel(LOGU_DEBUG);
@@ -161,6 +165,7 @@ int main(void) {
 	// motor init
 	L6470_Configuration1();
 	lm_init(plmh);
+	led_init(&htim1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_1);
 	can_init();
 	can_set_listener(can_rx_int);
 
@@ -193,9 +198,12 @@ int main(void) {
 		logu_s(LOGU_DEBUG, "Skip motor move.");
 	}
 
-	if (INIT_WIFI_SETUP) {
+#if WIFI_ENABLE==1
+	if (INIT_WIFI_CONNECT) {
 		wifi_autosetup_tasklist();
 	}
+#endif
+
 	logu_s(LOGU_DEBUG, "Initialize finished.");
 
 	// input receive kick start
@@ -206,11 +214,13 @@ int main(void) {
 	__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
 	HAL_UART_Receive_DMA(&huart1, (uint8_t*) inputbuf_get(), UART_INPUT_DMA_READ_RANGE);
 
+#if WIFI_ENABLE==1
 	// WiFi receive kick start
 	huart2.Instance->SR;
 	huart2.Instance->DR;
 	__HAL_UART_ENABLE_IT(&huart2, UART_IT_IDLE);
 	HAL_UART_Receive_DMA(&huart2, (uint8_t*) (wifi_gethandler()->recv.data), WIFI_RECV_DMA_RANGE);
+#endif
 
 	// turn off LED2 after init
 	LED2_GPIO->ODR |= LED2_GPIO_PIN;
@@ -238,6 +248,7 @@ int main(void) {
 		// detect switch on CN1
 		detect_cn1();
 
+#if WIFI_ENABLE == 1
 		// wifi received data to user serial
 		wifi_rx_to_uart();
 		// try to parse wifi received data as a command
@@ -246,6 +257,7 @@ int main(void) {
 		wifi_tick(wifi_gethandler(), wifi_tick_callback);
 		// wifi greets every ten second
 		wifi_greet_1();
+#endif
 
 		// can cache read
 		if (canbuf_read(&lmcan, canbuf, canlen) == 1) {
@@ -423,37 +435,76 @@ static void MX_SPI1_Init(void) {
 }
 
 /**
- * @brief TIM6 Initialization Function
+ * @brief TIM1 Initialization Function
  * @param None
  * @retval None
  */
-static void MX_TIM6_Init(void) {
+static void MX_TIM1_Init(void) {
 
-	/* USER CODE BEGIN TIM6_Init 0 */
+	/* USER CODE BEGIN TIM1_Init 0 */
 
-	/* USER CODE END TIM6_Init 0 */
+	/* USER CODE END TIM1_Init 0 */
 
+	TIM_ClockConfigTypeDef sClockSourceConfig = { 0 };
 	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
+	TIM_OC_InitTypeDef sConfigOC = { 0 };
+	TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = { 0 };
 
-	/* USER CODE BEGIN TIM6_Init 1 */
+	/* USER CODE BEGIN TIM1_Init 1 */
 
-	/* USER CODE END TIM6_Init 1 */
-	htim6.Instance = TIM6;
-	htim6.Init.Prescaler = 47;
-	htim6.Init.CounterMode = TIM_COUNTERMODE_UP;
-	htim6.Init.Period = 99;
-	htim6.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	if (HAL_TIM_Base_Init(&htim6) != HAL_OK) {
+	/* USER CODE END TIM1_Init 1 */
+	htim1.Instance = TIM1;
+	htim1.Init.Prescaler = 15;
+	htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+	htim1.Init.Period = 254;
+	htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+	htim1.Init.RepetitionCounter = 0;
+	htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+	if (HAL_TIM_Base_Init(&htim1) != HAL_OK) {
+		Error_Handler();
+	}
+	sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+	if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK) {
+		Error_Handler();
+	}
+	if (HAL_TIM_PWM_Init(&htim1) != HAL_OK) {
 		Error_Handler();
 	}
 	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
 	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-	if (HAL_TIMEx_MasterConfigSynchronization(&htim6, &sMasterConfig) != HAL_OK) {
+	if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK) {
 		Error_Handler();
 	}
-	/* USER CODE BEGIN TIM6_Init 2 */
+	sConfigOC.OCMode = TIM_OCMODE_PWM1;
+	sConfigOC.Pulse = 0;
+	sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+	sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+	sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+	sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+	sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+	if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK) {
+		Error_Handler();
+	}
+	if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK) {
+		Error_Handler();
+	}
+	if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK) {
+		Error_Handler();
+	}
+	sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+	sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+	sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+	sBreakDeadTimeConfig.DeadTime = 0;
+	sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+	sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+	sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+	if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK) {
+		Error_Handler();
+	}
+	/* USER CODE BEGIN TIM1_Init 2 */
 
-	/* USER CODE END TIM6_Init 2 */
+	/* USER CODE END TIM1_Init 2 */
+	HAL_TIM_MspPostInit(&htim1);
 
 }
 
@@ -561,9 +612,6 @@ static void MX_GPIO_Init(void) {
 	HAL_GPIO_WritePin(GPIOA, L6470CS_Pin | GPIO_PIN_8, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOE, LED_B_Pin | LED_R_Pin | LED_G_Pin, GPIO_PIN_RESET);
-
-	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_RESET);
 
 	/*Configure GPIO pins : L6470Flag_Pin L6470Busy_Pin */
@@ -584,13 +632,6 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-	/*Configure GPIO pins : LED_B_Pin LED_R_Pin LED_G_Pin */
-	GPIO_InitStruct.Pin = LED_B_Pin | LED_R_Pin | LED_G_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
 	/*Configure GPIO pin : CN1_Pin */
 	GPIO_InitStruct.Pin = CN1_Pin;
@@ -632,25 +673,27 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 		logu_s(LOGU_TRACE, "uart input buffer cycle complete");
 		inputbuf_setend(0);
 	} else if (huart == &huart2) {
+#if WIFI_ENABLE==1
 		logu_s(LOGU_TRACE, "wifi rx buffer cycle complete");
 		Wifi_HandleTypeDef *hwifi = wifi_gethandler();
 		hwifi->recv.idle = 1;
 		hwifi->recv.len = WIFI_RECV_DMA_RANGE;
+#endif
 	}
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
-	if (huart == &huart1)
+	if (huart == &huart1) {
 		led2_blink = 200;
-	else if (huart == &huart2) {
+		HAL_UART_DMAStop(huart);
+		HAL_UART_Receive_DMA(huart, (uint8_t*) inputbuf_get(), UART_INPUT_DMA_READ_RANGE);
+	} else if (huart == &huart2) {
+#if WIFI_ENABLE == 1
 		logu_s(LOGU_ERROR, "WiFi UART port Rx/Tx error.");
 		led2_blink = 25;
-	}
-}
-
-void HAL_TIM_TriggerCallback(TIM_HandleTypeDef *htim) {
-	if (htim == &htim6) {
-		led_timer_int();
+		HAL_UART_DMAStop(huart);
+		HAL_UART_Receive_DMA(&huart2, (uint8_t*) (wifi_gethandler()->recv.data), WIFI_RECV_DMA_RANGE);
+#endif
 	}
 }
 
@@ -680,7 +723,9 @@ void cmd_serial_int(UART_HandleTypeDef *huart) {
 // Interrupt Routine For WiFi IDLE
 void wifi_serial_int(UART_HandleTypeDef *huart) {
 	if (huart == &huart2) {
+#if WIFI_ENABLE==1
 		wifi_rx_idle_int(wifi_gethandler(), &hdma_usart2_rx);
+#endif
 	}
 }
 

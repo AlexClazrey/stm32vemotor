@@ -1,29 +1,28 @@
 #include "led.h"
 #include "main.h"
+#include "log_uart.h"
 
-static uint8_t red = 0, green = 0, blue = 0;
-static uint8_t counter = 0;
+#define LED_PWM_MODE TIM_OCMODE_PWM1
+static TIM_HandleTypeDef *ledtim;
+static uint32_t chr, chg, chb;
 
-void led_set(uint8_t r,uint8_t g,uint8_t b) {
-	red = r;
-	green = g;
-	blue = b;
+
+void led_init(TIM_HandleTypeDef *htim, uint32_t chred, uint32_t chgreen, uint32_t chblue) {
+	HAL_TIM_PWM_Start(htim, chred);
+	HAL_TIM_PWM_Start(htim, chgreen);
+	HAL_TIM_PWM_Start(htim, chblue);
+	ledtim = htim;
+	chr=chred;
+	chg=chgreen;
+	chb=chblue;
 }
 
-void led_timer_int() {
-	if(counter == 0) {
-		LED_R_GPIO_Port->BSRR = LED_R_Pin;
-		LED_G_GPIO_Port->BSRR = LED_G_Pin;
-		LED_B_GPIO_Port->BSRR = LED_B_Pin;
-	}
-	if(counter == red)
-		LED_R_GPIO_Port->BSRR = LED_R_Pin << 16;
-	if(counter == green)
-		LED_G_GPIO_Port->BSRR = LED_G_Pin << 16;
-	if(counter == blue)
-		LED_B_GPIO_Port->BSRR = LED_B_Pin << 16;
-	counter++;
-	// to split time into 255 parts which can be represented in light range from [0, 255], counter range is [0, 254].
-	if(counter == 254)
-		counter = 0;
+void led_set(uint8_t r,uint8_t g,uint8_t b) {
+	TIM_OC_InitTypeDef sconfig = {.OCMode = LED_PWM_MODE, .Pulse = r};
+	HAL_TIM_PWM_ConfigChannel(ledtim, &sconfig, chr);
+	sconfig.Pulse = g;
+	HAL_TIM_PWM_ConfigChannel(ledtim, &sconfig, chg);
+	sconfig.Pulse = b;
+	HAL_TIM_PWM_ConfigChannel(ledtim, &sconfig, chb);
+	logu_f(LOGU_INFO, "Led set to RGB: %hu %hu %hu", r, g, b);
 }
