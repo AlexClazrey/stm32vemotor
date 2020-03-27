@@ -30,6 +30,8 @@
 #include "util.h"
 #include "cycletick.h"
 #include "log_uart.h"
+#include "inputbuf.h"
+
 #include "lm.h"
 #include "can_io.h"
 #include "command.h"
@@ -72,14 +74,7 @@ DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
 
-/* Configurations */
-// definitions are in config.c .
-// main cycle time settings
-extern const uint32_t COUNT_INTV;
-extern const uint32_t COUNT_LIMIT;
-
 /* runtime variables */
-
 // led
 int led1_blink = 0;
 int led2_blink = 0;
@@ -92,14 +87,14 @@ int lm_home_set = 0; // 在CN1按下的期间有没有校准过HOME位置
 struct lm_handle lmh;
 struct lm_handle *plmh = &lmh;
 
+// usart input buffer
+struct inputbuf userbuf;
+
 // CAN receive command
 struct lm_cmd lmcan = { 0 };
 // can buffer
 char canbuf[8] = { 0 };
 volatile int canlen = 0;
-
-// main cycle
-static uint32_t main_cycle_count = 0;
 
 /* USER CODE END PV */
 
@@ -168,6 +163,8 @@ int main(void) {
 	led_init(&htim1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_1);
 	can_init();
 	can_set_listener(can_rx_int);
+	// user inputbuf
+	inputbuf_init_stack(&userbuf, &huart1);
 
 	// 初始化的过程
 	// 目前有向内移动直到 CN1 被按下这一步。
@@ -198,21 +195,16 @@ int main(void) {
 		logu_s(LOGU_DEBUG, "Skip motor move.");
 	}
 
-#if WIFI_ENABLE==1
-	if (INIT_WIFI_CONNECT) {
+#if WIFI_ENABLE == 1
+#if INIT_WIFI_CONNECT == 1 
 		wifi_autosetup_tasklist();
-	}
+#endif
 #endif
 
 	logu_s(LOGU_DEBUG, "Initialize finished.");
 
 	// input receive kick start
-	// Enable IDLE Interrupt with DMA circular reading
-	// Must clear state before enable idle or it will lost in a dead loop
-	huart1.Instance->SR;
-	huart1.Instance->DR;
-	__HAL_UART_ENABLE_IT(&huart1, UART_IT_IDLE);
-	HAL_UART_Receive_DMA(&huart1, (uint8_t*) inputbuf_get(), UART_INPUT_DMA_READ_RANGE);
+	inputbuf_start(&userbuf);
 
 #if WIFI_ENABLE==1
 	// WiFi receive kick start
@@ -231,16 +223,15 @@ int main(void) {
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
-	cycle_tick_init_report(maincyclecount);
 	while (1) {
-		cycle_tick_start();
+		cycletick_start();
 		if (led1_blink) {
-			if ((main_cycle_count % led1_blink) == 0) { // 64 cycle
+			if (cycletick_everyms(led1_blink)) { // 64 cycle
 				led1_flip();
 			}
 		}
 		if (led2_blink) {
-			if ((main_cycle_count % led2_blink) == 0) {
+			if (cycletick_everyms(led2_blink)) {
 				led2_flip();
 			}
 		}
@@ -255,8 +246,11 @@ int main(void) {
 		wifi_parse_cmd(plmh);
 		// wifi tick
 		wifi_tick(wifi_gethandler(), wifi_tick_callback);
+
+#if WIFI_GREET == 1
 		// wifi greets every ten second
 		wifi_greet_1();
+#endif
 #endif
 
 		// can cache read
@@ -269,7 +263,7 @@ int main(void) {
 		uart_user_inputbuf_read(plmh);
 
 		// cycle test 放在输入的位置后面
-		mcycle_cmd(plmh, main_cycle_count);
+		mcycle_cmd(plmh, cycletick_getcount());
 
 		// 在这里取出读入的第一条指令，我们限制每次主循环只在电机上执行一条指令，
 		// 这是为了时序和逻辑安全最好的办法。
@@ -321,12 +315,7 @@ int main(void) {
 #ifdef LOG_TXCPLT_REPORT
 		txcplt_report();
 #endif
-		// cycle count
-		main_cycle_count++;
-		if (main_cycle_count == COUNT_LIMIT) {
-			main_cycle_count = 0;
-		}
-		cycle_tick_sleep_to(COUNT_INTV);
+		cycletick_sleeptoend();
 	}
 	/* USER CODE END 3 */
 }
@@ -665,13 +654,13 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
 void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart1) {
 		logu_s(LOGU_TRACE, "uart input buffer cycle half complete");
-		inputbuf_setend(UART_INPUT_DMA_READ_RANGE / 2); // half complete is copy count / 2.
+		inputbuf_rxhalfcplt_callback(&userbuf);
 	}
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart1) {
 		logu_s(LOGU_TRACE, "uart input buffer cycle complete");
-		inputbuf_setend(0);
+		inputbuf_rxcplt_callback(&userbuf);
 	} else if (huart == &huart2) {
 #if WIFI_ENABLE==1
 		logu_s(LOGU_TRACE, "wifi rx buffer cycle complete");
@@ -684,13 +673,12 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
 	if (huart == &huart1) {
-		led2_blink = 200;
-		HAL_UART_DMAStop(huart);
-		HAL_UART_Receive_DMA(huart, (uint8_t*) inputbuf_get(), UART_INPUT_DMA_READ_RANGE);
+		led2_blink = 2000;
+		inputbuf_error_handler(&userbuf);
 	} else if (huart == &huart2) {
 #if WIFI_ENABLE == 1
 		logu_s(LOGU_ERROR, "WiFi UART port Rx/Tx error.");
-		led2_blink = 25;
+		led2_blink = 500;
 		HAL_UART_DMAStop(huart);
 		HAL_UART_Receive_DMA(&huart2, (uint8_t*) (wifi_gethandler()->recv.data), WIFI_RECV_DMA_RANGE);
 #endif
@@ -698,25 +686,17 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
 }
 
 void txcplt_report() {
-	if (maincyclecount() % 1000 == 0) {
+	if (cycletick_everyms(10000)) {
 		logu_f(LOGU_DEBUG, "log report: wrote %lu times in last 1000 cycles.", txcpltcount);
 		txcpltcount = 0;
 	}
 }
 
 // Interrupt Routine For Serial IDLE
-static uint32_t idlecount = 0;
 void cmd_serial_int(UART_HandleTypeDef *huart) {
 	if (huart == &huart1) {
-		// error was handled by HAL, only check IDLE here.
-		if (__HAL_UART_GET_FLAG(huart, USART_SR_IDLE)) {
-			__HAL_UART_CLEAR_FLAG(huart, USART_SR_IDLE);
-			logu_f(LOGU_TINY, "uart input idle %lu", idlecount++);
-			HAL_UART_DMAPause(huart);
-			uint32_t dmacnt = __HAL_DMA_GET_COUNTER(&hdma_usart1_rx);
-			inputbuf_setend(UART_INPUT_DMA_READ_RANGE - dmacnt);
-			HAL_UART_DMAResume(huart);
-		}
+		if(__HAL_UART_GET_FLAG(huart, USART_SR_IDLE))
+			inputbuf_idleinterrupt(&userbuf);
 	}
 }
 
@@ -727,6 +707,10 @@ void wifi_serial_int(UART_HandleTypeDef *huart) {
 		wifi_rx_idle_int(wifi_gethandler(), &hdma_usart2_rx);
 #endif
 	}
+}
+
+struct inputbuf *getuserbuf() {
+	return &userbuf;
 }
 
 static int cn1_hold_count = 0;
@@ -759,7 +743,7 @@ void can_rx_int(uint8_t *data, uint8_t len) {
 		memcpy(canbuf, data, len);
 		canlen = len;
 	} else {
-		led2_blink = 1;
+		led2_blink = 200;
 	}
 }
 
@@ -771,10 +755,6 @@ void led2_flip() {
 	LED2_GPIO->ODR ^= LED2_GPIO_PIN;
 }
 
-uint32_t maincyclecount() {
-	return main_cycle_count;
-}
-
 /* USER CODE END 4 */
 
 /**
@@ -784,7 +764,7 @@ uint32_t maincyclecount() {
 void Error_Handler(void) {
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
-	led1_blink = 100;
+	led1_blink = 1000;
 	/* USER CODE END Error_Handler_Debug */
 }
 

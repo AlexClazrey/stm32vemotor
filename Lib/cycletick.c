@@ -3,25 +3,21 @@
 #include "log_uart.h"
 #include <limits.h>
 
-/* Configurations */
-#include "config.h"
-// 是否开启汇报功能
-#ifdef CYCLETICK_REPORT
+#define true 1
+#define false 0
 
-// 每个几个周期汇报一次用时统计
-#ifndef CYCLETICK_REPORT_CYCLE
-#define CYCLETICK_REPORT_CYCLE 1000
-#endif
 
-#endif
+
 
 /* Runtime Variables */
+static uint32_t cyclecount = 0;
+
 // tick value when a main cycle starts
 static uint32_t tickstart = 0;
 
+static _Bool needreport = true;
+
 #ifdef CYCLETICK_REPORT
-// stat report 
-static uint32_t (*cyclecountfunc)() = NULL;
 static uint32_t tickmax = 0;
 static uint32_t ticksum = 0;
 
@@ -29,20 +25,21 @@ static void recordtime(uint32_t used);
 static void reporttime();
 #endif
 
-// ---------- Time
-void cycle_tick_start() {
+/* Functions */
+// Time functions
+void cycletick_start() {
 	tickstart = HAL_GetTick();
 }
 
-uint32_t cycle_tick_now() {
+uint32_t cycletick_now() {
 	return diffu(tickstart, HAL_GetTick(), UINT32_MAX + 1);
 }
 
-void cycle_tick_sleep_to(uint32_t ms) {
-	uint32_t elapsed = cycle_tick_now();
+void cycletick_sleepto(uint32_t ms) {
+	uint32_t elapsed = cycletick_now();
 #ifdef CYCLETICK_REPORT
 	recordtime(elapsed);
-	if(cyclecountfunc && cyclecountfunc() % CYCLETICK_REPORT_CYCLE == 0) {
+	if(needreport && cyclecount % CYCLETICK_REPORT_CYCLE == 0) {
 		reporttime();
 	}
 #endif
@@ -50,16 +47,39 @@ void cycle_tick_sleep_to(uint32_t ms) {
 		logu_f(LOGU_WARN, "Cycle Time Exceeded, time used: %d, target: %d.", elapsed, ms);
 		return;
 	}
-	while (cycle_tick_now() < ms)
+	while (cycletick_now() < ms)
 		;
 }
 
-#ifdef CYCLETICK_REPORT
-// ---- stat report functions
-void cycle_tick_init_report(uint32_t (*cyclecount)()) {
-	cyclecountfunc = cyclecount;
+void cycletick_sleeptoend() {
+	cyclecount++;
+	if(cyclecount == CYCLE_LIMIT) {
+		cyclecount = 0;
+	}
+	cycletick_sleepto(CYCLE_INTV);
 }
 
+uint32_t cycletick_getcount() {
+	return cyclecount;
+}
+
+_Bool cycletick_everyms(uint32_t interval) {
+	if(cyclecount % (interval / CYCLE_INTV) == 0) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
+void cycletick_disablereport() {
+    needreport = false;
+}
+void cycletick_enablereport() {
+    needreport = true;
+}
+
+#ifdef CYCLETICK_REPORT
+// stat report functions
 static void recordtime(uint32_t used) {
 	if(used > tickmax) {
 		tickmax = used;
@@ -76,8 +96,5 @@ static void reporttime() {
 	logu_f(LOGU_DEBUG, "Cycle tick report: max: %lu, average: %lu.%lu", tickmax, p1, p2);
 	ticksum = 0;
 	tickmax = 0;
-}
-#else
-void cycle_tick_init_report(uint32_t (*cyclecount)()) {
 }
 #endif

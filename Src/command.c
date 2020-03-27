@@ -1,11 +1,12 @@
 #include "command.h"
+#include "DSpin/dspin.h"
 #include "util.h"
 #include "cycletick.h"
 #include "log_uart.h"
+#include "inputbuf.h"
+
 #include "can_io.h"
 #include "led.h"
-
-#include "DSpin/dspin.h"
 #include "main.h"
 
 #if WIFI_ENABLE == 1
@@ -31,6 +32,7 @@ extern const int lm_cycle_in;
 // 1的时候只有跑完一整个测试循环，点击在最里面的位置才会暂停一会儿，
 // 0的时候在测试里的每一步都会暂停一会儿。
 extern int lm_cycle_pause_at_full_cycle;
+extern int lm_cycle_step_pause;
 
 // CAN 命令参数
 extern const uint8_t CAN_CMD_VER;
@@ -43,6 +45,7 @@ extern char *WIFI_SSID;
 extern char *WIFI_PWD;
 extern char *WIFI_TCP_IP;
 extern uint16_t WIFI_TCP_PORT;
+
 #endif
 
 #ifndef UART_INPUT_BUF_SIZE 
@@ -52,18 +55,6 @@ extern uint16_t WIFI_TCP_PORT;
 #ifndef cmd_length_limit 
 #define cmd_length_limit 40
 #endif
-
-// 引用主循环的配置
-extern const uint32_t COUNT_LIMIT;
-
-/* Runtime Variables */
-// Serial input command
-static char inputbuf[UART_INPUT_BUF_SIZE] = { 0 }; // 这个不需要 volatile 因为在读取这段的过程里读取的内容不会被更新改变，所以可以缓存。
-static int inputstart = 0; // 现在中断程序DMA不检测是不是覆盖，所以不需要volatile了
-static volatile int inputend = 0;
-
-// cmd parse buffer
-static char cmdbuf[cmd_length_limit + 1] = { 0 }; // 这个只会在主循环里面parse，所以不需要volatile
 
 #if WIFI_ENABLE == 1
 // WiFi
@@ -86,10 +77,8 @@ enum cmdfrom {
 /* Functions */
 // ------------- Input Buffer Process
 static void input_feedback(enum cmdfrom from, int success);
-static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint32_t *startindex, uint32_t endindex,
-		struct lm_handle *plmh, enum cmdfrom from, int suppress_error);
-static int cmd_copy(char *dest, const char *buf, int start, int end, int bufsize, int cmdsize);
-static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t *out_recevier);
+static enum inputcmdtype cmd_read_act(const char *src, struct lm_handle *plmh, enum cmdfrom from, int suppress_error);
+static enum inputcmdtype cmd_parse(const char *cmd, struct lm_cmd *out_store, uint8_t *out_recevier);
 static HAL_StatusTypeDef can_send_feedback(enum cmdfrom from, HAL_StatusTypeDef send_res);
 
 void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
@@ -104,65 +93,45 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 	// 如过缓存池被用满了那么停止这里的Read Input同时应该发出一个警告。
 	// 发送很多个CAN指令也可能消耗很多时间，所以这里还需要在Parse一个新的命令之前注意检查时间，
 	// 如果时间不多了那么就留到下一个循环处理。
-
+	_Bool lineend = 0;
+	const char* newinput = inputbuf_read_toline(getuserbuf(), &lineend);
 #if WIFI_ENABLE == 1
 	if (wifi_pipe_raw) {
 		// 如果开启WIFI透传，那么把用户在串口上的输入直接写入WIFI
 		// 同时给出 Echo
 		// 按下 Ctrl+D (ASCII EOT) 退出透传模式
-		uint32_t oldend = inputend;
-		if (inputbuf[inputstart] == 0x04) {
-			wifi_pipe_raw = 0;
-			inputstart++;
-			wifi_task_add(&hwifi, wifi_stopsend_unvarnished);
-			logu_s(LOGU_WARN, "Leave wifi pipe mode.");
-		} else if (inputstart != oldend) {
-			const char *src = inputbuf + inputstart;
-			size_t len;
-			if (inputstart < oldend) {
-				len = oldend - inputstart;
-				inputstart = oldend;
+		if(newinput != NULL) {
+			if (newinput[0] == 0x04) {
+				wifi_pipe_raw = 0;
+				wifi_task_add(&hwifi, wifi_stopsend_unvarnished);
+				logu_s(LOGU_WARN, "Leave wifi pipe mode.");
 			} else {
-				len = UART_INPUT_DMA_READ_RANGE - inputstart;
-				inputstart = 0;
+				uint32_t len = strlen(newinput);
+				wifi_send_raw(&hwifi, newinput, len);
+				logu_raw(newinput, len);
 			}
-			wifi_send_raw(&hwifi, src, len);
-			logu_raw(src, len);
 		}
 	} else {
 #endif
-		while (cycle_tick_now() < 8) {
+		while (cycletick_now() < 8 && lineend) {
 			if (!lm_hasspace(plmhandle)) {
 				logu_s(LOGU_WARN, "Stop reading input due to full lm_cmd queue");
 				return;
 			}
-			enum inputcmdtype type = inputbuf_read_one_cmd_and_action(inputbuf_get(), (uint32_t*) &inputstart, inputend,
-					plmhandle, CMD_FROM_SERIAL, 0);
+			enum inputcmdtype type = cmd_read_act(inputbuf_getline(getuserbuf()), plmhandle, CMD_FROM_SERIAL, 0);
 			if (type == input_empty)
 				break;
+			inputbuf_read_toline(getuserbuf(), &lineend);
 		}
 #if WIFI_ENABLE == 1
 	}
 #endif
 }
 
-char* inputbuf_get() {
-	return inputbuf;
-}
-
-void inputbuf_setend(uint32_t end) {
-	inputend = end;
-}
-
-static enum inputcmdtype inputbuf_read_one_cmd(const char *src, uint32_t *startindex, uint32_t endindex,
-		struct lm_cmd *out_pcmd, uint8_t *out_receiver);
-static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint32_t *startindex, uint32_t endindex,
-		struct lm_handle *plmh, enum cmdfrom from, int suppress_error) {
+static enum inputcmdtype cmd_read_act(const char *src, struct lm_handle *plmh, enum cmdfrom from, int suppress_error) {
 	struct lm_cmd cmd = { 0 };
 	uint8_t receiver = 0;
-
-	enum inputcmdtype type = inputbuf_read_one_cmd(src, startindex, endindex, &cmd, &receiver);
-
+	enum inputcmdtype type = cmd_parse(src, &cmd, &receiver);
 	if (type == input_error) {
 		// Error details was printed in parse function
 		if (!suppress_error) {
@@ -189,43 +158,6 @@ static enum inputcmdtype inputbuf_read_one_cmd_and_action(const char *src, uint3
 		logu_s(LOGU_ERROR, "Unknown error [01]");
 	}
 	return type;
-}
-
-static enum inputcmdtype inputbuf_read_one_cmd(const char *src, uint32_t *startindex, uint32_t endindex,
-		struct lm_cmd *out_pcmd, uint8_t *out_receiver) {
-	uint32_t cursor = *startindex;
-	int triggered = 0;
-	while (cursor != endindex) {
-		// check char here
-		char ch = src[cursor];
-		if (ch == '\0' || ch == '\r' || ch == '\n') {
-			triggered = 1;
-			break;
-		}
-		cursor++;
-		if (cursor == UART_INPUT_BUF_SIZE) {
-			cursor = 0;
-		}
-	}
-	if (!triggered) {
-		return input_empty;
-	}
-
-	if (cursor == (uint32_t) *startindex) {
-		logu_f(LOGU_DEBUG, "Yet another line ending.");
-		*startindex = addu(cursor, 1, UART_INPUT_BUF_SIZE);
-		return input_next; // 现在如果 \r\n 就会触发一次 next
-	}
-
-	int res = cmd_copy(cmdbuf, src, *startindex, cursor, UART_INPUT_BUF_SIZE, cmd_length_limit);
-	// 这个时候cursor指向的是 \r\n\0 不可能是 endindex 所以要再加一
-	*startindex = addu(cursor, 1, UART_INPUT_BUF_SIZE);
-
-	if (res) {
-		return cmd_parse(cmdbuf, out_pcmd, out_receiver);
-	} else {
-		return input_error;
-	}
 }
 
 static void wifi_send_tasklist(const char *str, int normalmode);
@@ -268,22 +200,9 @@ static HAL_StatusTypeDef can_send_feedback(enum cmdfrom from, HAL_StatusTypeDef 
  * [#<id>](mr|ms|mp|mpp|mreset|mhome|mcycle|mid)[ <args>]
  */
 
-// return 1 is good, 0 is error.
-static int cmd_copy(char *dest, const char *buf, int start, int end, int bufsize, int cmdsize) {
-	int len = cycarrtoarr(dest, cmdsize, buf, start, end, bufsize);
-	// 这里要记得 cstr 末尾的 NUL 字符
-	if (len != -1) {
-		dest[len] = '\0';
-		return 1;
-	} else {
-		logu_f(LOGU_ERROR, "Input longer than cmd length limit.");
-		return 0;
-	}
-}
-
-static int cmd_parse_body(char *cmd, struct lm_cmd *store);
-static int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir);
-static enum inputcmdtype cmd_parse(char *cmd, struct lm_cmd *out_store, uint8_t *out_receiver) {
+static int cmd_parse_body(const char *cmd, struct lm_cmd *store);
+static int read_mr_args(const char *cmd, uint32_t *out_speed, uint32_t *out_dir);
+static enum inputcmdtype cmd_parse(const char *cmd, struct lm_cmd *out_store, uint8_t *out_receiver) {
 	uint16_t receiver = (uint16_t) -1;
 
 	logu_f(LOGU_TRACE, "Parse: %s", cmd);
@@ -339,7 +258,7 @@ static char wifiscanip[64];
 // return 1: parse failed
 // return 2: settings command
 // return 3: wifi command
-static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
+static int cmd_parse_body(const char *cmd, struct lm_cmd *store) {
 	// any input will turn off motor cycle test
 	if (lm_cycle) {
 		logu_f(LOGU_INFO, "Cycle off.");
@@ -490,7 +409,7 @@ static int cmd_parse_body(char *cmd, struct lm_cmd *store) {
 	return 0;
 }
 
-static int read_mr_args(char *cmd, uint32_t *out_speed, uint32_t *out_dir) {
+static int read_mr_args(const char *cmd, uint32_t *out_speed, uint32_t *out_dir) {
 	uint32_t dir, speed;
 	// speed 1 ~ 30
 	// 太高的速度在冲击时会引发L6470过流关闭，需要 L6470 Reset 指令重新开启
@@ -529,8 +448,7 @@ void wifi_parse_cmd(struct lm_handle *plmh) {
 			return;
 		}
 		int startindex = s1 - cmd + 1;
-		enum inputcmdtype type = inputbuf_read_one_cmd_and_action(cmd, (uint32_t*) &startindex, wifi_rx_cap_len(&hwifi),
-				plmh, CMD_FROM_WIFI, 1);
+		enum inputcmdtype type = cmd_read_act(cmd + startindex, plmh, CMD_FROM_WIFI, 1);
 		if (type != input_empty)
 			logu_f(LOGU_DEBUG, "WiFi received command type: %d", (int) type);
 	}
@@ -554,8 +472,11 @@ void wifi_rx_to_uart() {
 }
 
 static char wifi_autosetup_greet_buf[50];
-static const char *wifi_autosetup_tasklist_name = "Auto Setup", *wifi_autosetup_joinap_taskname = "join ap",
-		*wifi_autosetup_tcpconn_taskname = "tcp conn";
+static const char
+		*wifi_autosetup_tasklist_name = "Auto Setup",
+		*wifi_autosetup_joinap_taskname = "join ap",
+		*wifi_autosetup_tcpconn_taskname = "tcp conn",
+		*wifi_autosetup_at_check = "at check";
 static const char *wifi_startsend_taskname = "start send";
 void wifi_autosetup_tasklist() {
 	// 1. Exit Send Mode
@@ -575,6 +496,7 @@ void wifi_autosetup_tasklist() {
 	wifi_task_setlistname(&hwifi, wifi_autosetup_tasklist_name);
 	wifi_task_add(&hwifi, wifi_stopsend_unvarnished);
 	wifi_task_add(&hwifi, wifi_checkat);
+	wifi_task_add_withname(&hwifi, wifi_checkat, wifi_autosetup_at_check);
 	wifi_task_add(&hwifi, wifi_setmodewifi_client);
 	wifi_task_add(&hwifi, wifi_setsingleconn);
 	wifi_task_add(&hwifi, wifi_setmodetrans_normal);
@@ -587,18 +509,18 @@ void wifi_autosetup_tasklist() {
 	// 我现在用的是TASK失败在回调函数里面处理的模式。
 }
 
-static char wifi_greet1_buf[50];
+static char wifi_greet1_buf[60];
 static const char *wifi_greet1_tasklist_name = "Greet 1";
 static void wifi_greet1_tasklist() {
 	if (wifi_task_isempty(&hwifi)) {
 		logu_s(LOGU_INFO, "Start WiFi Greet 1 task list.");
-		snprintf(wifi_greet1_buf, 50, "Another ten seconds passed on machine %hu ($ _ $)\r\n", (uint16_t) machine_id);
+		snprintf(wifi_greet1_buf, 60, "Another ten seconds passed on machine %hu ($ _ $)\r\n", (uint16_t) machine_id);
 		wifi_task_setlistname(&hwifi, wifi_greet1_tasklist_name);
 		wifi_send_tasklist(wifi_greet1_buf, 0);
 	}
 }
 void wifi_greet_1() {
-	if (maincyclecount() % 1000 == 0) {
+	if (cycletick_everyms(10000)) {
 		wifi_greet1_tasklist();
 	}
 }
@@ -637,7 +559,10 @@ void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int inde
 	if (tasksname == wifi_autosetup_tasklist_name) {
 		if (state != WRS_OK) {
 			logu_s(LOGU_ERROR, "WiFi Auto Setup task list failed");
-			if (itemname == wifi_autosetup_joinap_taskname) {
+			if (itemname == wifi_autosetup_at_check) {
+				wifi_task_clear(phwifi);
+				logu_s(LOGU_ERROR, "Failed on WiFi function check, check your hardware.");
+			} else if (itemname == wifi_autosetup_joinap_taskname) {
 				wifi_task_clear(phwifi);
 				logu_s(LOGU_ERROR, "Failed on WiFi connect AP, check your router and WiFi SSID/PWD settings");
 			} else if (itemname == wifi_autosetup_tcpconn_taskname) {
@@ -745,7 +670,7 @@ static void mcycle_append_cmd(struct lm_handle *plmh, uint32_t count) {
 		// TODO 因为现在POS状态下的校准HOME是关闭的（在之后的注释里），所以一旦移动向内的时候误差向内没有一个HOME校准，后面可能向内的误差累积都没有校准。
 		// 这就会引发问题。
 		lm_cycle_pause_count = count;
-	} else if (lm_cycle_pause_at_full_cycle || diffu(lm_cycle_pause_count, count, COUNT_LIMIT) > 100) {
+	} else if (lm_cycle_pause_at_full_cycle || diffu(lm_cycle_pause_count, count, CYCLE_LIMIT) > lm_cycle_step_pause / CYCLE_INTV) {
 		struct lm_model lmmod = plmh->mod;
 		// 这个if对应如果设置在每一步暂停一会儿，那么等待一段count计数
 		if ((lmmod.state == lm_state_pos && lmmod.pos == lm_cycle_in) || lmmod.state == lm_state_stop
@@ -755,7 +680,7 @@ static void mcycle_append_cmd(struct lm_handle *plmh, uint32_t count) {
 			// state speed 是进入了匀速模式
 			if (cn1_pressed()) {
 				// 当移动到最内侧CN1被按下。
-				if (!lm_cycle_pause_at_full_cycle || diffu(lm_cycle_pause_count, count, COUNT_LIMIT) > 100) {
+				if (!lm_cycle_pause_at_full_cycle || diffu(lm_cycle_pause_count, count, CYCLE_LIMIT) > lm_cycle_step_pause / CYCLE_INTV) {
 					// 向外移动
 					logu_s(LOGU_INFO, "Move forward");
 					lm_append_newcmd(plmh, lm_cmd_pos, lm_cycle_out, 0);
@@ -767,7 +692,7 @@ static void mcycle_append_cmd(struct lm_handle *plmh, uint32_t count) {
 				lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
 			} else {
 				// 进入匀速模式但是没有到头的情况
-				if (diffu(lm_cycle_speed_count, count, COUNT_LIMIT) > 200) {
+				if (diffu(lm_cycle_speed_count, count, CYCLE_LIMIT) > 200) {
 					// 太长时间没有到头说明点击进入了过热保护，这个时候等待一段时间再下命令会好。
 					lm_cycle_speed_count = count;
 					logu_s(LOGU_WARN, "Finding Home Again");

@@ -40,14 +40,15 @@
 
 /* ---- Settings ---- */
 #define LOG_HEAD_BUF_SIZE 30
-#define LOG_LINE_BUF_SIZE 200
-#define LOG_TOTAL_BUF_SIZE 2000
-#define LOG_LINES_COUNT 40
+#define LOG_LINE_BUF_SIZE 250
+#define LOG_TOTAL_BUF_SIZE 4000
+#define LOG_LINES_COUNT 60
 #define LOG_BAUDRATE 115200
 
 // If you want to debug this module.
 #define LOG_UART_DEBUG
 
+static const char *LOG_TINY_HEAD = "[Tiny] ";
 static const char *LOG_TRACE_HEAD = "[Trace]";
 static const char *LOG_DEBUG_HEAD = "[Debug]";
 static const char *LOG_INFO_HEAD = "[Info] ";
@@ -535,6 +536,8 @@ static int log_head(char *dest, enum logu_level level) {
 			head = LOG_TRACE_HEAD;
 		else if (level == LOGU_DEBUG)
 			head = LOG_DEBUG_HEAD;
+		else if (level == LOGU_TINY)
+			head = LOG_TINY_HEAD;
 		else if (level == LOGU_INFO)
 			head = LOG_INFO_HEAD;
 		else if (level == LOGU_WARN)

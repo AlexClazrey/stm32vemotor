@@ -84,10 +84,11 @@ void L6470_Configuration1(void) {
 	dSPIN_RegsStruct.MIN_SPEED = MinSpd_Steps_to_Par(0);
 	/* 全步进速度设置252步/秒，范围为7.63到15625步/秒*/
 	dSPIN_RegsStruct.FS_SPD = FSSpd_Steps_to_Par(400);										//252);
+	/* 这里要注意不同型号的电机需要的占空比很不一样，需要调整下面的四个数字 */
 	/*保持占空比（转矩）设定为10％，范围在0到99.6％*/
-	dSPIN_RegsStruct.KVAL_HOLD = Kval_Perc_to_Par(25);
+	dSPIN_RegsStruct.KVAL_HOLD = Kval_Perc_to_Par(10);
 	/* 运行占空比（转矩）设定为10％，范围在0到99.6％*/
-	dSPIN_RegsStruct.KVAL_RUN = Kval_Perc_to_Par(25);
+	dSPIN_RegsStruct.KVAL_RUN = Kval_Perc_to_Par(10);
 	/* 加速的占空比（转矩）设定为10％，范围在0到99.6％*/
 	dSPIN_RegsStruct.KVAL_ACC = Kval_Perc_to_Par(15);
 	/* 减速的占空比（转矩）设定为10％，范围在0到99.6％ */

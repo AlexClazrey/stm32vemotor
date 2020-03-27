@@ -12,10 +12,7 @@ uint32_t diffu(uint32_t from, uint32_t to, uint32_t overval) {
 		to += overval;
 	if (from > overval)
 		from += overval;
-	if (to >= from)
-		return to - from;
-	else
-		return to + overval - from ;
+	return diffup(from, to, overval);
 }
 
 // Addition with custom overflow value,

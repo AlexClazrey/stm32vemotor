@@ -59,7 +59,7 @@ void Error_Handler(void);
 void cmd_serial_int(UART_HandleTypeDef *huart);
 void wifi_serial_int(UART_HandleTypeDef *huart);
 int cn1_pressed();
-uint32_t maincyclecount();
+struct inputbuf *getuserbuf();
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

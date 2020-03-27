@@ -5,8 +5,6 @@
 #include "config.h"
 
 void uart_user_inputbuf_read(struct lm_handle *plmh);
-char* inputbuf_get();
-void inputbuf_setend(uint32_t end);
 
 #if WIFI_ENABLE==1
 #include "wifi8266/wifi_8266_mod.h"
