@@ -5,14 +5,14 @@
 /* 以下是设置项目，在config.c里还有一部分 Configurations Start */
 
 // WIFI 模块是否加载
-#define WIFI_ENABLE 1
+#define WIFI_ENABLE 0
 
 // 初始化的时候要做的事情。
 #define INIT_MOTOR_MOVE 0
 #define INIT_WIFI_CONNECT 0
 
 // WiFi每十秒发送一句问好
-#define WIFI_GREET 1
+#define WIFI_GREET 0
 
 
 // 串口
@@ -24,12 +24,6 @@
 #define UART_INPUT_DMA_READ_RANGE 300
 // 串口命令长度设置
 #define cmd_length_limit 40
-
-// LED
-#define LED1_GPIO GPIOA
-#define LED1_GPIO_PIN GPIO_PIN_8
-#define LED2_GPIO GPIOC
-#define LED2_GPIO_PIN GPIO_PIN_9
 
 // Tick Report
 //#define CYCLETICK_REPORT

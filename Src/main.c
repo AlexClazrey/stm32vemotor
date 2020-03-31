@@ -197,7 +197,9 @@ int main(void) {
 
 #if WIFI_ENABLE == 1
 #if INIT_WIFI_CONNECT == 1 
-		wifi_autosetup_tasklist();
+	logu_s(LOGU_DEBUG, "Wait 2 seconds for ESP8266 to init.");
+	while(HAL_GetTick() < 2000) {} // wait some time for ESP8266 init
+	wifi_autosetup_tasklist();
 #endif
 #endif
 
@@ -215,7 +217,7 @@ int main(void) {
 #endif
 
 	// turn off LED2 after init
-	LED2_GPIO->ODR |= LED2_GPIO_PIN;
+	Led2_GPIO_Port->ODR |= Led2_Pin;
 
 	logu_s(LOGU_DEBUG, "Start listening.");
 
@@ -598,10 +600,10 @@ static void MX_GPIO_Init(void) {
 	__HAL_RCC_GPIOB_CLK_ENABLE();
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOA, L6470CS_Pin | GPIO_PIN_8, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOA, L6470CS_Pin | Led1_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(Led2_GPIO_Port, Led2_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pins : L6470Flag_Pin L6470Busy_Pin */
 	GPIO_InitStruct.Pin = L6470Flag_Pin | L6470Busy_Pin;
@@ -609,14 +611,14 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_PULLUP;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-	/*Configure GPIO pin : SW2_Pin */
-	GPIO_InitStruct.Pin = SW2_Pin;
-	GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	HAL_GPIO_Init(SW2_GPIO_Port, &GPIO_InitStruct);
+	/*Configure GPIO pins : SW2_Pin SW3_Pin */
+	GPIO_InitStruct.Pin = SW2_Pin | SW3_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+	GPIO_InitStruct.Pull = GPIO_PULLUP;
+	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-	/*Configure GPIO pins : L6470CS_Pin PA8 */
-	GPIO_InitStruct.Pin = L6470CS_Pin | GPIO_PIN_8;
+	/*Configure GPIO pins : L6470CS_Pin Led1_Pin */
+	GPIO_InitStruct.Pin = L6470CS_Pin | Led1_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -628,16 +630,12 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	HAL_GPIO_Init(CN1_GPIO_Port, &GPIO_InitStruct);
 
-	/*Configure GPIO pin : PC9 */
-	GPIO_InitStruct.Pin = GPIO_PIN_9;
+	/*Configure GPIO pin : Led2_Pin */
+	GPIO_InitStruct.Pin = Led2_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-	/* EXTI interrupt init*/
-	HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+	HAL_GPIO_Init(Led2_GPIO_Port, &GPIO_InitStruct);
 
 }
 
@@ -695,7 +693,7 @@ void txcplt_report() {
 // Interrupt Routine For Serial IDLE
 void cmd_serial_int(UART_HandleTypeDef *huart) {
 	if (huart == &huart1) {
-		if(__HAL_UART_GET_FLAG(huart, USART_SR_IDLE))
+		if (__HAL_UART_GET_FLAG(huart, USART_SR_IDLE))
 			inputbuf_idleinterrupt(&userbuf);
 	}
 }
@@ -709,7 +707,7 @@ void wifi_serial_int(UART_HandleTypeDef *huart) {
 	}
 }
 
-struct inputbuf *getuserbuf() {
+struct inputbuf* getuserbuf() {
 	return &userbuf;
 }
 
@@ -749,10 +747,10 @@ void can_rx_int(uint8_t *data, uint8_t len) {
 
 // LED
 void led1_flip() {
-	LED1_GPIO->ODR ^= LED1_GPIO_PIN;
+	Led1_GPIO_Port->ODR ^= Led1_Pin;
 }
 void led2_flip() {
-	LED2_GPIO->ODR ^= LED2_GPIO_PIN;
+	Led2_GPIO_Port->ODR ^= Led2_Pin;
 }
 
 /* USER CODE END 4 */

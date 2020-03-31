@@ -67,9 +67,10 @@ struct inputbuf *getuserbuf();
 #define L6470Flag_GPIO_Port GPIOC
 #define L6470Busy_Pin GPIO_PIN_2
 #define L6470Busy_GPIO_Port GPIOC
-#define SW2_Pin GPIO_PIN_1
+#define SW2_Pin GPIO_PIN_0
 #define SW2_GPIO_Port GPIOA
-#define SW2_EXTI_IRQn EXTI1_IRQn
+#define SW3_Pin GPIO_PIN_1
+#define SW3_GPIO_Port GPIOA
 #define WifiTX_Pin GPIO_PIN_2
 #define WifiTX_GPIO_Port GPIOA
 #define WifiRx_Pin GPIO_PIN_3
@@ -78,6 +79,10 @@ struct inputbuf *getuserbuf();
 #define L6470CS_GPIO_Port GPIOA
 #define CN1_Pin GPIO_PIN_6
 #define CN1_GPIO_Port GPIOC
+#define Led2_Pin GPIO_PIN_9
+#define Led2_GPIO_Port GPIOC
+#define Led1_Pin GPIO_PIN_8
+#define Led1_GPIO_Port GPIOA
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

@@ -112,6 +112,8 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 			}
 		}
 	} else {
+#else
+	newinput = newinput; // get rid of a GCC unused warning
 #endif
 		while (cycletick_now() < 8 && lineend) {
 			if (!lm_hasspace(plmhandle)) {
@@ -448,7 +450,7 @@ void wifi_parse_cmd(struct lm_handle *plmh) {
 			return;
 		}
 		int startindex = s1 - cmd + 1;
-		enum inputcmdtype type = cmd_read_act(cmd + startindex, plmh, CMD_FROM_WIFI, 1);
+		enum inputcmdtype type = cmd_read_act(cmd + startindex, plmh, CMD_FROM_WIFI, 0);
 		if (type != input_empty)
 			logu_f(LOGU_DEBUG, "WiFi received command type: %d", (int) type);
 	}
@@ -667,7 +669,7 @@ static void mcycle_append_cmd(struct lm_handle *plmh, uint32_t count) {
 	if (L6470_BUSY1()) {
 		// 在运转到某个位置的途中会出现BUSY
 		// 其他时候都不会有BUSY
-		// TODO 因为现在POS状态下的校准HOME是关闭的（在之后的注释里），所以一旦移动向内的时候误差向内没有一个HOME校准，后面可能向内的误差累积都没有校准。
+		// TODO 因为现在POS状态下的校准HOME是关闭的，所以一旦移动向内的时候误差向内没有一个HOME校准，后面可能向内的误差累积都没有校准。
 		// 这就会引发问题。
 		lm_cycle_pause_count = count;
 	} else if (lm_cycle_pause_at_full_cycle || diffu(lm_cycle_pause_count, count, CYCLE_LIMIT) > lm_cycle_step_pause / CYCLE_INTV) {
