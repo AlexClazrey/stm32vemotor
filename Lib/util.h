@@ -5,7 +5,7 @@
 
 #define true 1
 #define false 0
-#define ABS(x) (x>0?x:(-x))
+#define ABS(x) ((x)>0?(x):(-(x)))
 
 // Substraction with custom overflow value,
 // input value range is [0, overval - 1].

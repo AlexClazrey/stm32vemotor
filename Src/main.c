@@ -80,7 +80,6 @@ int led1_blink = 0;
 int led2_blink = 0;
 
 // cn1 press
-int cn1_indicator = 0;
 int lm_home_set = 0; // 在CN1按下的期间有没有校准过HOME位置
 
 // motor
@@ -109,6 +108,8 @@ static void MX_USART2_UART_Init(void);
 static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 void detect_cn1();
+void detect_sw2();
+void detect_sw3();
 void can_rx_int(uint8_t *data, uint8_t len);
 void led1_flip();
 void led2_flip();
@@ -176,7 +177,7 @@ int main(void) {
 			uint32_t init_tick = HAL_GetTick();
 			while (1) {
 				detect_cn1();
-				if (cn1_indicator) {
+				if (cn1_pressed()) {
 					logu_s(LOGU_DEBUG, "Moving finished");
 					lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
 					lm_commit(plmh);
@@ -240,6 +241,8 @@ int main(void) {
 
 		// detect switch on CN1
 		detect_cn1();
+		detect_sw2();
+		detect_sw3();
 
 #if WIFI_ENABLE == 1
 		// wifi received data to user serial
@@ -261,8 +264,8 @@ int main(void) {
 		}
 		canlen = 0;
 
-		// read input buffer
-		uart_user_inputbuf_read(plmh);
+		// read input buffer and switch
+		command_read(plmh);
 
 		// cycle test 放在输入的位置后面
 		mcycle_cmd(plmh, cycletick_getcount());
@@ -281,7 +284,7 @@ int main(void) {
 
 		// if cn1 is pressed only stop 1 - FWD - close direction
 		// TODO add pos detection after implementing read pos function
-		if (cn1_indicator) {
+		if (cn1_pressed()) {
 			// cn1 按下的时候重置 home，这个只能在按下期间执行，
 			// 因为在 pos 状态下重置 home 会发生惨剧，会把现在高速移动的某个位置标记成HOME，
 			// 导致在向外移动的过程里面如果按下HOME那么就会冲出范围。
@@ -711,27 +714,64 @@ struct inputbuf* getuserbuf() {
 	return &userbuf;
 }
 
-static int cn1_hold_count = 0;
-void detect_cn1() {
-	// if CN1 signal is low
-	if (!(CN1_GPIO_Port->IDR & CN1_Pin)) {
-		// avoid shake - hold at least 5 cycles to trigger
-		if (cn1_hold_count >= 5) {
-			if (!cn1_indicator) {
-				logu_s(LOGU_DEBUG, "CN1 pressed.");
-				cn1_indicator = 1;
+struct gpio_switch {
+	GPIO_TypeDef* port;
+	uint16_t pin;
+	const char* name;
+	int hold_count;
+	_Bool pressed;
+};
+_Bool detect_switch(struct gpio_switch* swi) {
+	if(!(swi->port->IDR & swi->pin)) {
+		if(swi->hold_count >= 5) {
+			if(!swi->pressed) {
+				logu_f(LOGU_DEBUG, "%s pressed.", swi->name);
+				swi->pressed = 1;
 			}
 		} else {
-			cn1_hold_count++;
+			swi->hold_count++;
 		}
 	} else {
-		cn1_indicator = 0;
-		cn1_hold_count = 0;
+		swi->hold_count = 0;
+		swi->pressed = 0;
 	}
+	return swi->pressed;
 }
 
+static struct gpio_switch cn1_swi = {
+		.port = CN1_GPIO_Port,
+		.pin = CN1_Pin,
+		.name = "CN1",
+};
+void detect_cn1() {
+	detect_switch(&cn1_swi);
+}
 int cn1_pressed() {
-	return cn1_indicator;
+	return cn1_swi.pressed;
+}
+
+static struct gpio_switch sw2_swi = {
+		.port = SW2_GPIO_Port,
+		.pin = SW2_Pin,
+		.name = "SW2",
+};
+void detect_sw2() {
+	detect_switch(&sw2_swi);
+}
+int sw2_pressed() {
+	return sw2_swi.pressed;
+}
+
+static struct gpio_switch sw3_swi = {
+		.port = SW3_GPIO_Port,
+		.pin = SW3_Pin,
+		.name = "SW3",
+};
+void detect_sw3() {
+	detect_switch(&sw3_swi);
+}
+int sw3_pressed() {
+	return sw3_swi.pressed;
 }
 
 // CAN read

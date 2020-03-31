@@ -75,6 +75,76 @@ enum cmdfrom {
 };
 
 /* Functions */
+// ------------- Main Function
+void uart_user_inputbuf_read(struct lm_handle *plmh);
+void command_switch_read(struct lm_handle *plmhandle);
+void command_read(struct lm_handle *plmhandle) {
+	uart_user_inputbuf_read(plmhandle);
+	command_switch_read(plmhandle);
+}
+// ------------- Switch Process
+int sw2_previous = 0, sw3_previous = 0;
+int sw23_count = 0;
+struct rgb {
+	uint8_t r,g,b;
+};
+static struct rgb hue_to_rgb(uint16_t hue, uint8_t sat, uint8_t val);
+void command_switch_read(struct lm_handle *plmhandle) {
+	if(sw2_pressed() && sw3_pressed()) {
+		if(!sw2_previous || !sw3_previous)
+			lm_append_newcmd(plmhandle, lm_cmd_stop, 0, 0);
+		else
+			sw23_count++;
+		// treat sw23 as hue
+		struct rgb color = hue_to_rgb(sw23_count % 360, 100, 100);
+		led_set(color.r, color.g, color.b);
+	} else if (sw2_pressed()) {
+		if(!sw2_previous)
+			lm_append_newcmd(plmhandle, lm_cmd_speed, 20000, 0);
+	} else if (sw3_pressed()) {
+		if(!sw3_previous)
+			lm_append_newcmd(plmhandle, lm_cmd_speed, 20000, 1);
+	} else {
+		if(sw2_previous || sw3_previous)
+			lm_append_newcmd(plmhandle, lm_cmd_stop, 0, 0);
+		sw23_count = 0;
+	}
+	sw2_previous = sw2_pressed();
+	sw3_previous = sw3_pressed();
+}
+
+// sat is 0-100, val is 0-100, hue is 0-360
+static struct rgb hue_to_rgb(uint16_t hue, uint8_t sat, uint8_t val) {
+	uint16_t c = sat * val / 100;
+	uint16_t x = c * (60 - ABS((int)hue % 120 - 60)) / 60;
+	uint16_t m = val - c;
+	uint32_t r = 0, g = 0, b = 0;
+	if(hue < 60) {
+		r = c;
+		g = x;
+	} else if (hue < 120) {
+		r = x;
+		g = c;
+	} else if (hue < 180) {
+		g = c;
+		b = x;
+	} else if (hue < 240) {
+		g = x;
+		b = c;
+	} else if (hue < 300) {
+		r = x;
+		b = c;
+	} else {
+		r = c;
+		b = x;
+	}
+	struct rgb res;
+	res.r = (r+m)*255/100;
+	res.g = (g+m)*255/100;
+	res.b = (b+m)*255/100;
+	return res;
+}
+
 // ------------- Input Buffer Process
 static void input_feedback(enum cmdfrom from, int success);
 static enum inputcmdtype cmd_read_act(const char *src, struct lm_handle *plmh, enum cmdfrom from, int suppress_error);

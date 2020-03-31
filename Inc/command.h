@@ -4,8 +4,6 @@
 #include "lm.h"
 #include "config.h"
 
-void uart_user_inputbuf_read(struct lm_handle *plmh);
-
 #if WIFI_ENABLE==1
 #include "wifi8266/wifi_8266_mod.h"
 
@@ -17,6 +15,7 @@ void wifi_parse_cmd(struct lm_handle* plmh);
 void wifi_tick_callback(Wifi_HandleTypeDef* phwifi, WifiRtnState state, int index, int finished);
 #endif
 
+void command_read(struct lm_handle* plmh);
 HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id);
 int canbuf_read(struct lm_cmd *dest, char *data, size_t len);
 

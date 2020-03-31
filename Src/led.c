@@ -25,4 +25,7 @@ void led_set(uint8_t r,uint8_t g,uint8_t b) {
 	sconfig.Pulse = b;
 	HAL_TIM_PWM_ConfigChannel(ledtim, &sconfig, chb);
 	logu_f(LOGU_INFO, "Led set to RGB: %hu %hu %hu", r, g, b);
+	HAL_TIM_PWM_Start(ledtim, chr);
+	HAL_TIM_PWM_Start(ledtim, chg);
+	HAL_TIM_PWM_Start(ledtim, chb);
 }
