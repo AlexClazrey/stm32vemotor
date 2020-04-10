@@ -1,52 +1,101 @@
 #include "can_io.h"
 
-CAN_RxHeaderTypeDef can_rx_header = { 0 };
-CAN_TxHeaderTypeDef can_tx_header = { 0 };
-CAN_FilterTypeDef can_filter = { 0 };
-uint32_t can_tx_mailbox = 0;
-static CAN_MsgListener can_lis = NULL;
+// reference to def in main.c
+extern CAN_HandleTypeDef hcan;
 
-void can_init() {
-	can_tx_header.DLC = 8;
-	can_tx_header.IDE = CAN_ID_STD;
-	can_tx_header.RTR = CAN_RTR_DATA; // Data Frame or Remote Request Frame;
-	can_tx_header.StdId = CAN_ADDRESS;
+uint32_t can_tx_mailbox_used = 0;
+static uint8_t can_selfid = 0;
+static CAN_CmdListener cmdlis;
+static CAN_ReplyListener replis;
 
-	can_filter.FilterFIFOAssignment = CAN_FILTER_FIFO0;
-	can_filter.FilterIdHigh = CAN_LISTEN_TO << 5;
-	can_filter.FilterIdLow = 0;
-	can_filter.FilterMaskIdHigh = 0;
-	can_filter.FilterMaskIdLow = 0;
-	can_filter.FilterScale = CAN_FILTERSCALE_32BIT;
-	can_filter.FilterActivation = CAN_FILTER_ENABLE;
-	HAL_CAN_ConfigFilter(&hcan, &can_filter);
 
+void can_init(uint8_t selfid) {
+	can_set_id(selfid);
 	HAL_CAN_Start(&hcan);
 	HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
+	HAL_CAN_ActivateNotification(&hcan, CAN_IT_RX_FIFO1_MSG_PENDING);
+}
+void can_set_cmdlistener(CAN_CmdListener lis) {
+	cmdlis = lis;
+}
+void can_set_replylistener(CAN_ReplyListener lis) {
+	replis = lis;
 }
 
-void can_set_listener(CAN_MsgListener listener) {
-	can_lis = listener;
+#define CMD_HEADER 0x000
+#define REPLY_OK_HEADER 0x700
+#define REPLY_BAD_HEADER 0x300
+void can_set_id(uint8_t id) {
+	can_selfid = id;
+	CAN_FilterTypeDef filter1 = {
+		.FilterIdHigh = (CMD_HEADER + id) << 5,
+		.FilterIdLow = 0,
+		.FilterMaskIdHigh = 0xFFE0,
+		.FilterMaskIdLow = 0,
+		.FilterFIFOAssignment = CAN_FILTER_FIFO0,
+		.FilterBank = 0,
+		.FilterMode = CAN_FILTERMODE_IDMASK,
+		.FilterScale = CAN_FILTERSCALE_32BIT,
+		.FilterActivation = CAN_FILTER_ENABLE,
+	};
+	HAL_CAN_ConfigFilter(&hcan, &filter1);
+	CAN_FilterTypeDef filter2 = {
+		.FilterIdHigh = (REPLY_OK_HEADER + id) << 5,
+		.FilterIdLow = (REPLY_BAD_HEADER + id) << 5,
+		.FilterMaskIdHigh = 0xFFE0,
+		.FilterMaskIdLow = 0xFFE0,
+		.FilterFIFOAssignment = CAN_FILTER_FIFO1,
+		.FilterBank = 1,
+		.FilterMode = CAN_FILTERMODE_IDMASK,
+		.FilterScale = CAN_FILTERSCALE_16BIT,
+		.FilterActivation = CAN_FILTER_ENABLE,
+	};
+	HAL_CAN_ConfigFilter(&hcan, &filter2);
 }
 
-// data can have 8 bytes at most.
-HAL_StatusTypeDef can_msg_add(uint8_t* data, uint8_t len) {
-	if (len > 8) {
-		return HAL_ERROR;
+// data must have 8 bytes can be read.
+HAL_StatusTypeDef can_send_cmd(uint8_t *data, uint8_t len, uint8_t to) {
+	CAN_TxHeaderTypeDef txh = {0};
+	txh.StdId = CMD_HEADER + to;
+	txh.ExtId = (txh.StdId << 18) + can_selfid;
+	txh.IDE = CAN_ID_EXT;
+	txh.RTR = CAN_RTR_DATA;
+	txh.DLC = len;
+	txh.TransmitGlobalTime = DISABLE;
+	return HAL_CAN_AddTxMessage(&hcan, &txh, data, &can_tx_mailbox_used);
+}
+
+HAL_StatusTypeDef can_send_reply(uint8_t to, _Bool ok) {
+	static uint8_t emptydata[8] = {0};
+	CAN_TxHeaderTypeDef txh = {0};
+	txh.StdId = (ok ? REPLY_OK_HEADER : REPLY_BAD_HEADER) + to;
+	txh.ExtId = (txh.StdId << 18) + can_selfid;
+	txh.IDE = CAN_ID_EXT;
+	txh.RTR = CAN_RTR_DATA;
+	txh.DLC = 0;
+	txh.TransmitGlobalTime = DISABLE;
+	return HAL_CAN_AddTxMessage(&hcan, &txh, emptydata, &can_tx_mailbox_used);
+}
+
+void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *pcan) {
+	CAN_RxHeaderTypeDef rxh = {0};
+	uint8_t data[8] = {0};
+	if (HAL_CAN_GetRxMessage(pcan, CAN_RX_FIFO0, &rxh, data) == HAL_OK) {
+		uint8_t from = (uint8_t)rxh.ExtId;
+		if(cmdlis) {
+			cmdlis(data, rxh.DLC, from);
+		}
 	}
-	can_tx_header.DLC = len;
-	// 这里的函数直接会读入 header 的数据操作不保存引用，所以可以安全复用不担心 header 数据出错。
-	// 并且这个函数也会直接拷贝走data里面的数据，所以不用担心data是一个局部变量
-	return HAL_CAN_AddTxMessage(&hcan, &can_tx_header, data, &can_tx_mailbox);
 }
 
-static uint8_t canbuf[10] = { 0 };
-void can_msg_get() {
-	// I set interrupt for FIFO0.
-	if (HAL_CAN_GetRxMessage(&hcan, CAN_RX_FIFO0, &can_rx_header, canbuf)
-			== HAL_OK) {
-		if (can_lis) {
-			can_lis(canbuf, can_rx_header.DLC);
+void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *pcan) {
+	CAN_RxHeaderTypeDef rxh = {0};
+	uint8_t data[8] = {0};
+	if (HAL_CAN_GetRxMessage(pcan, CAN_RX_FIFO1, &rxh, data) == HAL_OK) {
+		uint8_t from = (uint8_t)rxh.ExtId;
+		_Bool isok = ((rxh.ExtId >> 18) & REPLY_OK_HEADER) == REPLY_OK_HEADER;
+		if(replis) {
+			replis(isok, from);
 		}
 	}
 }

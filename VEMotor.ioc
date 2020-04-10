@@ -1,9 +1,12 @@
 #MicroXplorer Configuration settings - do not modify
 CAN.BS1=CAN_BS1_4TQ
 CAN.BS2=CAN_BS2_2TQ
-CAN.CalculateTimeBit=4666
-CAN.CalculateTimeQuantum=666.6666666666666
-CAN.IPParameters=CalculateTimeQuantum,CalculateTimeBit,BS1,BS2
+CAN.CalculateTimeBit=28000
+CAN.CalculateTimeQuantum=4000.0
+CAN.IPParameters=CalculateTimeQuantum,CalculateTimeBit,BS1,BS2,Prescaler,NART,TXFP
+CAN.NART=DISABLE
+CAN.Prescaler=96
+CAN.TXFP=DISABLE
 Dma.Request0=USART1_RX
 Dma.Request1=USART1_TX
 Dma.Request2=USART2_RX
@@ -93,6 +96,7 @@ Mcu.UserName=STM32F103VETx
 MxCube.Version=5.6.0
 MxDb.Version=DB.5.0.60
 NVIC.BusFault_IRQn=true\:0\:0\:false\:false\:true\:false\:false
+NVIC.CAN1_RX1_IRQn=true\:0\:0\:false\:false\:true\:true\:true
 NVIC.DMA1_Channel4_IRQn=true\:1\:0\:true\:false\:true\:false\:true
 NVIC.DMA1_Channel5_IRQn=true\:1\:0\:true\:false\:true\:false\:true
 NVIC.DMA1_Channel6_IRQn=true\:1\:0\:true\:false\:true\:false\:true

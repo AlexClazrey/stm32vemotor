@@ -15,7 +15,8 @@
             "defines": [
                 "STM32F103xE",
                 "DEBUG",
-                "USE_HAL_DRIVER"
+                "USE_HAL_DRIVER",
+                "USE_FULL_ASSERT"
             ],
             "cStandard": "c11"
         }

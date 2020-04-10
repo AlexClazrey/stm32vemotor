@@ -36,6 +36,7 @@
 #include "can_io.h"
 #include "command.h"
 #include "led.h"
+#include "flash.h"
 
 #if WIFI_ENABLE==1
 #include "wifi8266/wifi_8266_mod.h"
@@ -50,7 +51,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define USE_FULL_ASSERT
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -89,8 +89,6 @@ struct lm_handle *plmh = &lmh;
 // usart input buffer
 struct inputbuf userbuf;
 
-// CAN receive command
-struct lm_cmd lmcan = { 0 };
 // can buffer
 char canbuf[8] = { 0 };
 volatile int canlen = 0;
@@ -110,7 +108,8 @@ static void MX_TIM1_Init(void);
 void detect_cn1();
 void detect_sw2();
 void detect_sw3();
-void can_rx_int(uint8_t *data, uint8_t len);
+void can_cmd_isr(uint8_t *data, uint8_t len, uint8_t from);
+void can_reply_isr(_Bool ok, uint8_t from);
 void led1_flip();
 void led2_flip();
 void txcplt_report();
@@ -155,46 +154,55 @@ int main(void) {
 	MX_USART2_UART_Init();
 	MX_TIM1_Init();
 	/* USER CODE BEGIN 2 */
+	
 	logu_init(&huart1, LOGU_DMA);
 //	logu_setlevel(LOGU_DEBUG);
 	logu_setlevel(LOGU_TRACE);
+
+	// 初始化的过程
+	logu_s(LOGU_DEBUG, "Start initializing.");
+	uint8_t flash_mid = flash_load_machineid();
+	if(flash_mid == 0 || flash_mid == 0xFF) {
+		logu_f(LOGU_WARN, "No machine id stored in flash, using default id: %u.", (uint32_t)machine_id);
+	} else {
+		machine_id = flash_mid;
+	}
+	can_init(machine_id);
+	can_set_cmdlistener(can_cmd_isr);
+	can_set_replylistener(can_reply_isr);
 	// motor init
 	L6470_Configuration1();
 	lm_init(plmh);
 	led_init(&htim1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_1);
-	can_init();
-	can_set_listener(can_rx_int);
 	// user inputbuf
 	inputbuf_init_stack(&userbuf, &huart1);
+	flash_init();
 
-	// 初始化的过程
-	// 目前有向内移动直到 CN1 被按下这一步。
-	logu_s(LOGU_DEBUG, "Start initializing.");
-	if (INIT_MOTOR_MOVE) {
-		logu_s(LOGU_DEBUG, "Moving to initial position.");
-		lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
-		if (lm_commit(plmh)) {
-			uint32_t init_tick = HAL_GetTick();
-			while (1) {
-				detect_cn1();
-				if (cn1_pressed()) {
-					logu_s(LOGU_DEBUG, "Moving finished");
-					lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
-					lm_commit(plmh);
-					break;
-				} else if (HAL_GetTick() - init_tick > 10000) {
-					logu_s(LOGU_ERROR, "Moving timeout.");
-					lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
-					lm_commit(plmh);
-					break;
-				}
+#if INIT_MOTOR_MOVE == 1
+	logu_s(LOGU_DEBUG, "Moving to initial position.");
+	lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
+	if (lm_commit(plmh)) {
+		uint32_t init_tick = HAL_GetTick();
+		while (1) {
+			detect_cn1();
+			if (cn1_pressed()) {
+				logu_s(LOGU_DEBUG, "Moving finished");
+				lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
+				lm_commit(plmh);
+				break;
+			} else if (HAL_GetTick() - init_tick > 10000) {
+				logu_s(LOGU_ERROR, "Moving timeout.");
+				lm_append_newcmd(plmh, lm_cmd_stop, 0, 0);
+				lm_commit(plmh);
+				break;
 			}
-		} else {
-			logu_s(LOGU_ERROR, "Reset position failed.");
 		}
 	} else {
-		logu_s(LOGU_DEBUG, "Skip motor move.");
+		logu_s(LOGU_ERROR, "Reset position failed.");
 	}
+#else
+	logu_s(LOGU_DEBUG, "Skip motor move.");
+#endif
 
 #if WIFI_ENABLE == 1
 #if INIT_WIFI_CONNECT == 1 
@@ -259,9 +267,8 @@ int main(void) {
 #endif
 
 		// can cache read
-		if (canbuf_read(&lmcan, canbuf, canlen) == 1) {
-			lm_append_cmd(plmh, (struct lm_cmd*) &lmcan);
-		}
+		if (canlen)
+			canbuf_read(canbuf, canlen, plmh);
 		canlen = 0;
 
 		// read input buffer and switch
@@ -296,7 +303,8 @@ int main(void) {
 				logu_s(LOGU_INFO, "Set home");
 				lcf->type = lm_cmd_set_home;
 			}
-			if ((lcf->type == lm_cmd_speed && lcf->dir_hard == 1) || (lmmod.state == lm_state_speed && lmmod.dir == 1)
+			if ((lcf->type == lm_cmd_speed && lcf->dir_hard == 1) || (lcf->type == lm_cmd_relapos && lcf->pos_speed > 0)
+					|| ((lmmod.state == lm_state_speed || lmmod.state == lm_state_relapos) && lmmod.dir == 1)
 					|| (lcf->type == lm_cmd_pos && lcf->pos_speed > 0)
 					|| (lmmod.state == lm_state_pos && lmmod.pos > 0)) {
 				logu_s(LOGU_WARN, "Stop motor due to CN1.");
@@ -372,7 +380,7 @@ static void MX_CAN_Init(void) {
 
 	/* USER CODE END CAN_Init 1 */
 	hcan.Instance = CAN1;
-	hcan.Init.Prescaler = 16;
+	hcan.Init.Prescaler = 96;
 	hcan.Init.Mode = CAN_MODE_NORMAL;
 	hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
 	hcan.Init.TimeSeg1 = CAN_BS1_4TQ;
@@ -715,16 +723,16 @@ struct inputbuf* getuserbuf() {
 }
 
 struct gpio_switch {
-	GPIO_TypeDef* port;
+	GPIO_TypeDef *port;
 	uint16_t pin;
-	const char* name;
+	const char *name;
 	int hold_count;
 	_Bool pressed;
 };
-_Bool detect_switch(struct gpio_switch* swi) {
-	if(!(swi->port->IDR & swi->pin)) {
-		if(swi->hold_count >= 5) {
-			if(!swi->pressed) {
+_Bool detect_switch(struct gpio_switch *swi) {
+	if (!(swi->port->IDR & swi->pin)) {
+		if (swi->hold_count >= 5) {
+			if (!swi->pressed) {
 				logu_f(LOGU_DEBUG, "%s pressed.", swi->name);
 				swi->pressed = 1;
 			}
@@ -738,11 +746,7 @@ _Bool detect_switch(struct gpio_switch* swi) {
 	return swi->pressed;
 }
 
-static struct gpio_switch cn1_swi = {
-		.port = CN1_GPIO_Port,
-		.pin = CN1_Pin,
-		.name = "CN1",
-};
+static struct gpio_switch cn1_swi = { .port = CN1_GPIO_Port, .pin = CN1_Pin, .name = "CN1", };
 void detect_cn1() {
 	detect_switch(&cn1_swi);
 }
@@ -750,11 +754,7 @@ int cn1_pressed() {
 	return cn1_swi.pressed;
 }
 
-static struct gpio_switch sw2_swi = {
-		.port = SW2_GPIO_Port,
-		.pin = SW2_Pin,
-		.name = "SW2",
-};
+static struct gpio_switch sw2_swi = { .port = SW2_GPIO_Port, .pin = SW2_Pin, .name = "SW2", };
 void detect_sw2() {
 	detect_switch(&sw2_swi);
 }
@@ -762,11 +762,7 @@ int sw2_pressed() {
 	return sw2_swi.pressed;
 }
 
-static struct gpio_switch sw3_swi = {
-		.port = SW3_GPIO_Port,
-		.pin = SW3_Pin,
-		.name = "SW3",
-};
+static struct gpio_switch sw3_swi = { .port = SW3_GPIO_Port, .pin = SW3_Pin, .name = "SW3", };
 void detect_sw3() {
 	detect_switch(&sw3_swi);
 }
@@ -775,13 +771,24 @@ int sw3_pressed() {
 }
 
 // CAN read
-void can_rx_int(uint8_t *data, uint8_t len) {
-	// multiple CAN commands in one main cycle will drop and blink led2
+void can_cmd_isr(uint8_t *data, uint8_t len, uint8_t from) {
+	// multiple CAN commands in one main cycle will drop and blink led2 quickly
 	if (canlen == 0) {
 		memcpy(canbuf, data, len);
 		canlen = len;
 	} else {
 		led2_blink = 200;
+	}
+}
+
+void can_reply_isr(_Bool ok, uint8_t from) {
+	char buf[40];
+	char *st = ok ? "OK" : "FAIL";
+	int len = snprintf(buf, 40, "<#%hu %s>\r\n", from, st);
+	if (len > 0 && len < 40) {
+		logu_raw(buf, len);
+	} else {
+		led2_blink = 1000;
 	}
 }
 

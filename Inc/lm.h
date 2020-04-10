@@ -11,6 +11,7 @@ enum lm_state {
 	lm_state_reset,
 	lm_state_speed,
 	lm_state_pos,
+	lm_state_relapos,
 	lm_state_stop,
 };
 
@@ -28,6 +29,7 @@ enum lm_cmd_type {
 	lm_cmd_stop,
 	lm_cmd_speed,
 	lm_cmd_pos,
+	lm_cmd_relapos,
 };
 
 struct lm_cmd {

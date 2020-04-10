@@ -30,6 +30,8 @@
 // Log Report
 //#define LOG_TXCPLT_REPORT
 
+extern uint8_t machine_id;
+
 /* 以上是设置项目 Configurations End */
 
 #endif

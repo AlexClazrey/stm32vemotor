@@ -107,6 +107,7 @@ static int lm_commit_cmd(struct lm_cmd *cmd, volatile struct lm_model *model) {
 		model->speed = cmd->pos_speed;
 		model->dir = cmd->dir_hard;
 	} else if(cmd->type == lm_cmd_pos) {
+		// stop previous move or it won't listen to another command
 		if(L6470_BUSY1()) {
 			dSPIN_Hard_Stop();
 			logu_f(LOGU_TRACE, "Stop previous movement.");
@@ -116,6 +117,16 @@ static int lm_commit_cmd(struct lm_cmd *cmd, volatile struct lm_model *model) {
 		model->state = lm_state_pos;
 		model->speed = 0;
 		model->pos = cmd->pos_speed;
+	} else if(cmd->type == lm_cmd_relapos) {
+		if(L6470_BUSY1()) {
+			dSPIN_Hard_Stop();
+			logu_f(LOGU_TRACE, "Stop previous movement.");
+		}
+		uint32_t step = ABS(cmd->pos_speed);
+		dSPIN_Move(cmd->pos_speed > 0, step);
+		logu_f(LOGU_TRACE, "LM move: %ld", cmd->pos_speed);
+		model->dir = cmd->pos_speed > 0;
+		model->state = lm_state_relapos;
 	}
 	return 1;
 }

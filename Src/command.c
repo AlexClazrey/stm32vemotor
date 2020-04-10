@@ -7,6 +7,7 @@
 
 #include "can_io.h"
 #include "led.h"
+#include "flash.h"
 #include "main.h"
 
 #if WIFI_ENABLE == 1
@@ -148,8 +149,7 @@ static struct rgb hue_to_rgb(uint16_t hue, uint8_t sat, uint8_t val) {
 // ------------- Input Buffer Process
 static void input_feedback(enum cmdfrom from, int success);
 static enum inputcmdtype cmd_read_act(const char *src, struct lm_handle *plmh, enum cmdfrom from, int suppress_error);
-static enum inputcmdtype cmd_parse(const char *cmd, struct lm_cmd *out_store, uint8_t *out_recevier);
-static HAL_StatusTypeDef can_send_feedback(enum cmdfrom from, HAL_StatusTypeDef send_res);
+static enum inputcmdtype cmd_parse(const char *cmd, struct cmd *out_store);
 
 void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 	// 这个函数把解析InputBuffer的工作从中断里面遇到行尾设置结束符，
@@ -186,6 +186,7 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 	newinput = newinput; // get rid of a GCC unused warning
 #endif
 		while (cycletick_now() < 8 && lineend) {
+			// now it gets a new line
 			if (!lm_hasspace(plmhandle)) {
 				logu_s(LOGU_WARN, "Stop reading input due to full lm_cmd queue");
 				return;
@@ -200,36 +201,120 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 #endif
 }
 
+HAL_StatusTypeDef cmd_can_send(struct cmd *cmd);
+static HAL_StatusTypeDef cmd_cansendfeedback(enum cmdfrom from, HAL_StatusTypeDef send_res);
+static void cmd_action(struct cmd* cmd, struct lm_handle* plmh);
 static enum inputcmdtype cmd_read_act(const char *src, struct lm_handle *plmh, enum cmdfrom from, int suppress_error) {
-	struct lm_cmd cmd = { 0 };
-	uint8_t receiver = 0;
-	enum inputcmdtype type = cmd_parse(src, &cmd, &receiver);
+	struct cmd cmd = { 0 };
+	// any input will turn off motor cycle test
+	if (lm_cycle) {
+		logu_f(LOGU_INFO, "Cycle off.");
+		lm_cycle = 0;
+	}
+	enum inputcmdtype type = cmd_parse(src, &cmd);
 	if (type == input_error) {
 		// Error details was printed in parse function
 		if (!suppress_error) {
 			input_feedback(from, false);
 		}
-	} else if (type == input_empty) {
-		// 读到empty表示输入缓冲区已经读完了。
-	} else if (type == input_lmcmd) {
-		// 如果是本机的命令，那么加入cmd queue。
-		lm_append_cmd(plmh, &cmd);
-		input_feedback(from, true);
-	} else if (type == input_settings) {
-		input_feedback(from, true);
-	} else if (type == input_can) {
-		HAL_StatusTypeDef hs = can_cmd_send(&cmd, receiver);
-		can_send_feedback(from, hs);
-		HAL_Delay(1); // TODO 这里强行停顿不太好，但是CAN SEND需要一点时间。
-		input_feedback(from, hs == HAL_OK);
-	} else if (type == input_wifi) {
-		input_feedback(from, true);
 	} else if (type == input_next) {
 		// do nothing here
+		// 在 parse 的时候会输出一句 debug 表示又读到一句空行
+	} else if (type == input_empty) {
+		// 读到empty表示输入缓冲区已经读完了。
+	} else if (type == input_can) {
+		HAL_StatusTypeDef hs = cmd_can_send(&cmd);
+		cmd_cansendfeedback(from, hs);
+		HAL_Delay(1); // TODO 这里强行停顿不太好，但是CAN SEND需要一点时间。
+		input_feedback(from, hs == HAL_OK);
 	} else {
-		logu_s(LOGU_ERROR, "Unknown error [01]");
+		cmd_action(&cmd, plmh);
+		input_feedback(from, true);
 	}
 	return type;
+}
+
+static void cmd2lmcmd(struct cmd* cmd, struct lm_cmd* lmcmd) {
+	switch(cmd->type) {
+		case cmd_motor_stop:
+		lmcmd->type = lm_cmd_stop;
+		lmcmd->dir_hard = cmd->motorcmd.dir;
+		break;
+		case cmd_motor_speed:
+		lmcmd->type = lm_cmd_speed;
+		lmcmd->pos_speed = cmd->motorcmd.speed;
+		lmcmd->dir_hard = cmd->motorcmd.dir;
+		break;
+		case cmd_motor_reset:
+		lmcmd->type = lm_cmd_reset;
+		break;
+		case cmd_motor_set_home:
+		lmcmd->type = lm_cmd_set_home;
+		break;
+		case cmd_motor_pos:
+		lmcmd->type = lm_cmd_pos;
+		lmcmd->pos_speed = cmd->motorcmd.pos;
+		break;
+		case cmd_motor_relapos:
+		lmcmd->type = lm_cmd_relapos;
+		lmcmd->pos_speed = cmd->motorcmd.pos;
+		break;
+		case cmd_motor_percent:
+		lmcmd->type = lm_cmd_pos;
+		lmcmd->pos_speed = (int) ((double) cmd->motorcmd.percent * (lm_limit_out - lm_limit_in) / 100 + lm_limit_in);
+		break;
+		default:
+		logu_f(LOGU_ERROR, "unknown cmd convert: %d.", (int)cmd->type);
+	}
+}
+
+static void cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
+	struct lm_cmd lmcmd = {0};
+	// any input except mcycle will turn off motor cycle test
+	if (lm_cycle) {
+		logu_f(LOGU_INFO, "Cycle off.");
+		lm_cycle = 0;
+	}
+	switch(cmd->type) {
+		case cmd_motor_stop:
+		case cmd_motor_speed:
+		case cmd_motor_reset:
+		case cmd_motor_set_home:
+		case cmd_motor_pos:
+		case cmd_motor_relapos:
+		case cmd_motor_percent:
+		cmd2lmcmd(cmd, &lmcmd);
+		lm_append_cmd(plmh, &lmcmd);
+		break;
+		case cmd_setting_id:
+		machine_id = cmd->settingcmd.machine_id;
+		can_set_id(machine_id);
+		flash_save_machineid(machine_id);
+		break;
+		case cmd_setting_mcycle:
+		lm_cycle = !lm_cycle;
+		if (lm_cycle) {
+			// cycle kick start action, move to cycle_in position
+			lmcmd.type = lm_cmd_pos;
+			lmcmd.pos_speed = lm_cycle_in;
+			lm_append_cmd(plmh, &lmcmd);
+		}
+		break;
+		case cmd_wifi_check:
+		case cmd_wifi_auto:
+		case cmd_wifi_join:
+		case cmd_wifi_leave:
+		case cmd_wifi_tcp_connect:
+		case cmd_wifi_tcp_drop:
+		// TODO wifi mock
+		// wifi command 在 parse 的时候直接执行了
+		break;
+		case cmd_led_color:
+		led_set(cmd->ledcmd.red, cmd->ledcmd.green, cmd->ledcmd.blue);
+		break;
+		default:
+		logu_f(LOGU_ERROR, "Action unknown cmd: %d.", (int)cmd->type);
+	}
 }
 
 static void wifi_send_tasklist(const char *str, int normalmode);
@@ -249,7 +334,7 @@ static void input_feedback(enum cmdfrom from, int success) {
 	}
 }
 
-static HAL_StatusTypeDef can_send_feedback(enum cmdfrom from, HAL_StatusTypeDef send_res) {
+static HAL_StatusTypeDef cmd_cansendfeedback(enum cmdfrom from, HAL_StatusTypeDef send_res) {
 	if (from == CMD_FROM_SERIAL) {
 		if (send_res == HAL_OK) {
 			logu_f(LOGU_DEBUG, "CAN Send OK.");
@@ -272,9 +357,9 @@ static HAL_StatusTypeDef can_send_feedback(enum cmdfrom from, HAL_StatusTypeDef 
  * [#<id>](mr|ms|mp|mpp|mreset|mhome|mcycle|mid)[ <args>]
  */
 
-static int cmd_parse_body(const char *cmd, struct lm_cmd *store);
+static int cmd_parse_body(const char *cmd, struct cmd *store);
 static int read_mr_args(const char *cmd, uint32_t *out_speed, uint32_t *out_dir);
-static enum inputcmdtype cmd_parse(const char *cmd, struct lm_cmd *out_store, uint8_t *out_receiver) {
+static enum inputcmdtype cmd_parse(const char *cmd, struct cmd *out_store) {
 	uint16_t receiver = (uint16_t) -1;
 
 	logu_f(LOGU_TRACE, "Parse: %s", cmd);
@@ -291,7 +376,8 @@ static enum inputcmdtype cmd_parse(const char *cmd, struct lm_cmd *out_store, ui
 			logu_s(LOGU_ERROR, "Cmd id read error.");
 			return 1;
 		}
-		*out_receiver = (uint8_t) receiver;
+		out_store->receiver = (uint8_t) receiver;
+		out_store->sender = machine_id;
 		if (cmd[scanlen] == ' ') {
 			// 兼容ID后面有或者没有空格两种情况
 			cmd++;
@@ -304,19 +390,22 @@ static enum inputcmdtype cmd_parse(const char *cmd, struct lm_cmd *out_store, ui
 
 	if (res == 1) {
 		return input_error;
-	} else if (res == 2) {
-		return input_settings;
-	} else if (res == 0) {
-		if (receiver == machine_id || receiver == (uint16_t) -1) {
+	}  
+	if (receiver == machine_id || receiver == (uint16_t) -1) {
+		if (res == 0) {
 			return input_lmcmd;
+		} else if (res == 2) {
+			return input_settings;
+		} else if (res == 3) {
+			return input_wifi;
+		} else if (res == 4) {
+			return input_led;
 		} else {
-			return input_can;
+			logu_f(LOGU_ERROR, "Unknown error [02]");
+			return input_error;
 		}
-	} else if (res == 3) {
-		return input_wifi;
 	} else {
-		logu_f(LOGU_ERROR, "Unknown error [02]");
-		return input_error;
+		return input_can;
 	}
 }
 
@@ -330,32 +419,21 @@ static char wifiscanip[64];
 // return 1: parse failed
 // return 2: settings command
 // return 3: wifi command
-static int cmd_parse_body(const char *cmd, struct lm_cmd *store) {
-	// any input will turn off motor cycle test
-	if (lm_cycle) {
-		logu_f(LOGU_INFO, "Cycle off.");
-		lm_cycle = 0;
-	}
+// return 4: led command
+static int cmd_parse_body(const char *cmd, struct cmd *store) {
 	if (cmd[0] == 'm') {
 		if (strncmp(cmd + 1, "cycle", 5) == 0) {
-			// TODO 把循环测试也做成能用CAN发送的命令。
-			// TODO settings command 包括 mid 和 mcycle 都没有储存机制
-			lm_cycle = !lm_cycle;
-			if (lm_cycle) {
-				// cycle kick start action, move to cycle_in position
-				store->type = lm_cmd_pos;
-				store->pos_speed = lm_cycle_in;
-				return 0;
-			}
+			store->type = cmd_setting_mcycle;
 			return 2;
 		} else if (strncmp(cmd + 1, "home", 4) == 0) {
-			store->type = lm_cmd_set_home;
+			store->type = cmd_motor_set_home;
 		} else if (strncmp(cmd + 1, "reset", 5) == 0) {
-			store->type = lm_cmd_reset;
+			store->type = cmd_motor_reset;
 		} else if (strncmp(cmd + 1, "id ", 3) == 0) {
 			uint16_t id;
+			store->type = cmd_setting_id;
 			if (sscanf(cmd + 4, "%hu", &id) == 1 && id < 256) {
-				machine_id = id;
+				store->settingcmd.machine_id = id;
 				return 2;
 			} else {
 				logu_s(LOGU_ERROR, "Read Machine Id Error, should between 0 and 255.");
@@ -368,18 +446,20 @@ static int cmd_parse_body(const char *cmd, struct lm_cmd *store) {
 				logu_s(LOGU_ERROR, "Read mr command failed.");
 				return 1;
 			}
-			store->pos_speed = pos;
-			store->dir_hard = dir;
-			store->type = lm_cmd_speed;
+			store->type = cmd_motor_speed;
+			store->motorcmd.pos = pos;
+			store->motorcmd.dir = dir;
 		} else if (cmd[1] == 's') {
-			store->type = lm_cmd_stop;
+			store->type = cmd_motor_stop;
 		} else if (cmd[1] == 'p') {
 			if (cmd[2] == ' ') {
-				if (sscanf(cmd + 3, "%ld", &(store->pos_speed)) != 1) {
+				store->type = cmd_motor_pos;
+				if (sscanf(cmd + 3, "%ld", &(store->motorcmd.pos)) != 1) {
 					logu_s(LOGU_ERROR, "Read mp command failed.");
 					return 1;
 				}
 			} else if (cmd[2] == 'p' && cmd[3] == ' ') {
+				store->type = cmd_motor_percent;
 				uint16_t percent;
 				if (sscanf(cmd + 4, "%hu", &percent) != 1) {
 					logu_s(LOGU_ERROR, "Read mpp percent failed.");
@@ -389,9 +469,14 @@ static int cmd_parse_body(const char *cmd, struct lm_cmd *store) {
 					logu_s(LOGU_ERROR, "Mpp percent should between 0 and 100.");
 					return 1;
 				}
-				store->pos_speed = (int) ((double) percent / 100 * (lm_limit_out - lm_limit_in) + lm_limit_in);
+				store->motorcmd.percent = percent;
+			} else if (cmd[2] == 'r' && cmd[3] == ' ') {
+				store->type = cmd_motor_relapos;
+				if (sscanf(cmd + 4, "%ld", &(store->motorcmd.pos)) != 1) {
+					logu_s(LOGU_ERROR, "Read mp command failed.");
+					return 1;
+				}
 			}
-			store->type = lm_cmd_pos;
 		} else {
 			logu_s(LOGU_ERROR, "Command parse failed");
 			return 1;
@@ -472,8 +557,10 @@ static int cmd_parse_body(const char *cmd, struct lm_cmd *store) {
 			logu_s(LOGU_ERROR, "Led brightness too high.");
 			return 1;
 		}
-		led_set((uint8_t)r, (uint8_t)g, (uint8_t)b);
-		return 2;
+		store->ledcmd.red = r;
+		store->ledcmd.green = g;
+		store->ledcmd.blue = b;
+		return 4;
 	} else {
 		logu_s(LOGU_ERROR, "Command parse failed");
 		return 1;
@@ -667,62 +754,88 @@ static void wifi_send_tasklist(const char *str, int normalmode) {
 }
 #endif
 
-// CAN send lm_cmd
-HAL_StatusTypeDef can_cmd_send(struct lm_cmd *cmd, uint8_t receiver_id) {
-	uint8_t msg[8];
-	uint32_t pos = cmd->pos_speed;
-	msg[0] = CAN_CMD_VER;
-	msg[1] = CAN_CMD_LM;
-	msg[2] = receiver_id;
-	msg[3] = (uint8_t) (cmd->type);
-	msg[4] = (uint8_t) (pos >> 16);
-	msg[5] = (uint8_t) (pos >> 8);
-	msg[6] = (uint8_t) (pos);
-	msg[7] = (uint8_t) (cmd->dir_hard);
-	return can_msg_add(msg, 8);
+HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
+	uint8_t msg[8] = {0};
+	msg[0] = machine_id;
+	msg[1] = (uint8_t)cmd->type;
+	switch(cmd->type) {
+		case cmd_motor_stop:
+		case cmd_motor_speed:
+		case cmd_motor_reset:
+		case cmd_motor_set_home:
+		case cmd_motor_pos:
+		case cmd_motor_relapos:
+		case cmd_motor_percent:
+		msg[2] = (uint8_t)cmd->motorcmd.pos;
+		msg[3] = (uint8_t)(cmd->motorcmd.pos >> 8);
+		msg[4] = (uint8_t)(cmd->motorcmd.pos >> 16);
+		msg[5] = (uint8_t)(cmd->motorcmd.pos >> 24);
+		msg[6] = cmd->motorcmd.dir;
+		break;
+		case cmd_setting_id:
+		msg[2] = cmd->settingcmd.machine_id;
+		break;
+		case cmd_setting_mcycle:
+		case cmd_wifi_check:
+		case cmd_wifi_auto:
+		case cmd_wifi_join:
+		case cmd_wifi_leave:
+		case cmd_wifi_tcp_connect:
+		case cmd_wifi_tcp_drop:
+		break;
+		case cmd_led_color:
+		msg[2] = cmd->ledcmd.red;
+		msg[3] = cmd->ledcmd.green;
+		msg[4] = cmd->ledcmd.blue;
+		break;
+		default:
+		logu_f(LOGU_ERROR, "CAN Unknown send cmd: %d.", (int)cmd->type);
+	}
+	return can_send_cmd(msg, 8, cmd->receiver);
 }
 
-/*
- * return 0 for buffer empty
- * return -1 for received invalid
- * return 1 for lm_cmd got.
- * return 2 for string got.
- */
-int canbuf_read(struct lm_cmd *dest, char *data, size_t len) {
-	if (len > 0) {
-		if (len >= 3) {
-			uint8_t ver = data[0], cmd = data[1], id = data[2];
-			if (id == machine_id) {
-				if (ver != CAN_CMD_VER) {
-					logu_f(LOGU_ERROR, "CAN Message version doesn't equal mine.");
-					return -1;
-				}
-				if (cmd == CAN_CMD_LM) {
-					// 按照 cmd_run 里面的编码方法重新组装消息
-					dest->type = data[3];
-					dest->pos_speed = (int32_t) ((data[4] << 16) + (data[5] << 8) + (data[6]));
-					dest->dir_hard = data[7];
-					return 1;
-				} else if (cmd == CAN_CMD_STRING) {
-					char buf[8] = { 0 };
-					memcpy(buf, data + 2, len - 2);
-					logu_f(LOGU_INFO, "CAN Received: %s", buf);
-					return 2;
-				} else {
-					logu_f(LOGU_ERROR, "CAN unknown command %hu.", (uint16_t) cmd);
-					return -1;
-				}
-			} else {
-				logu_f(LOGU_DEBUG, "Ignore CAN Message with other's id #%hu", (uint16_t) id);
-				return -1;
-			}
-		} else {
-			logu_f(LOGU_WARN, "CAN Invalid Message: Too Short.");
-			return -1;
-		}
-	} else {
-		return 0;
+int cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
+	cmd->sender = data[0];
+	cmd->type = (enum cmdtype)data[1];
+	switch(cmd->type) {
+		case cmd_motor_stop:
+		case cmd_motor_speed:
+		case cmd_motor_reset:
+		case cmd_motor_set_home:
+		case cmd_motor_pos:
+		case cmd_motor_relapos:
+		case cmd_motor_percent:
+		cmd->motorcmd.pos = data[2] + (data[3] << 8) + (data[4] << 16) + (data[5] << 24);
+		cmd->motorcmd.dir = data[6];
+		break;
+		case cmd_setting_id:
+		cmd->settingcmd.machine_id = data[2];
+		break;
+		case cmd_setting_mcycle:
+		case cmd_wifi_check:
+		case cmd_wifi_auto:
+		case cmd_wifi_join:
+		case cmd_wifi_leave:
+		case cmd_wifi_tcp_connect:
+		case cmd_wifi_tcp_drop:
+		break;
+		case cmd_led_color:
+		cmd->ledcmd.red = data[2];
+		cmd->ledcmd.green = data[3];
+		cmd->ledcmd.blue = data[4];
+		break;
+		default:
+		logu_f(LOGU_ERROR, "CAN Unknown read cmd: %d.", (int)cmd->type);
+		return 1;
 	}
+	return 0;
+}
+
+void canbuf_read(char *data, size_t len, struct lm_handle *plmhandle) {
+	struct cmd cmd = {0};
+	_Bool ok = cmd_can_read(data, len, &cmd) == 0;
+	cmd_action(&cmd, plmhandle);
+	can_send_reply(cmd.sender, ok);
 }
 
 // ----------
