@@ -92,6 +92,7 @@ struct inputbuf userbuf;
 // can buffer
 char canbuf[8] = { 0 };
 volatile int canlen = 0;
+_Bool canbroadcast = 0;
 
 /* USER CODE END PV */
 
@@ -108,11 +109,12 @@ static void MX_TIM1_Init(void);
 void detect_cn1();
 void detect_sw2();
 void detect_sw3();
-void can_cmd_isr(uint8_t *data, uint8_t len, uint8_t from);
+void can_cmd_isr(uint8_t *data, uint8_t len, uint8_t from, _Bool isBroadcast);
 void can_reply_isr(_Bool ok, uint8_t from);
 void led1_flip();
 void led2_flip();
 void txcplt_report();
+void load_configurations();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -154,19 +156,15 @@ int main(void) {
 	MX_USART2_UART_Init();
 	MX_TIM1_Init();
 	/* USER CODE BEGIN 2 */
-	
+
+	// init log module first for basic output
 	logu_init(&huart1, LOGU_DMA);
-//	logu_setlevel(LOGU_DEBUG);
+	// logu_setlevel(LOGU_DEBUG);
 	logu_setlevel(LOGU_TRACE);
 
 	// 初始化的过程
 	logu_s(LOGU_DEBUG, "Start initializing.");
-	uint8_t flash_mid = flash_load_machineid();
-	if(flash_mid == 0 || flash_mid == 0xFF) {
-		logu_f(LOGU_WARN, "No machine id stored in flash, using default id: %u.", (uint32_t)machine_id);
-	} else {
-		machine_id = flash_mid;
-	}
+	load_configurations();
 	can_init(machine_id);
 	can_set_cmdlistener(can_cmd_isr);
 	can_set_replylistener(can_reply_isr);
@@ -205,9 +203,10 @@ int main(void) {
 #endif
 
 #if WIFI_ENABLE == 1
-#if INIT_WIFI_CONNECT == 1 
 	logu_s(LOGU_DEBUG, "Wait 2 seconds for ESP8266 to init.");
-	while(HAL_GetTick() < 2000) {} // wait some time for ESP8266 init
+	while (HAL_GetTick() < 2000) {
+	} // wait some time for ESP8266 init
+#if INIT_WIFI_CONNECT == 1
 	wifi_autosetup_tasklist();
 #endif
 #endif
@@ -252,6 +251,9 @@ int main(void) {
 		detect_sw2();
 		detect_sw3();
 
+		// motor state refresh
+		lm_tick(plmh);
+
 #if WIFI_ENABLE == 1
 		// wifi received data to user serial
 		wifi_rx_to_uart();
@@ -268,7 +270,7 @@ int main(void) {
 
 		// can cache read
 		if (canlen)
-			canbuf_read(canbuf, canlen, plmh);
+			canbuf_read(canbuf, canlen, canbroadcast, plmh);
 		canlen = 0;
 
 		// read input buffer and switch
@@ -341,7 +343,7 @@ void SystemClock_Config(void) {
 	RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
 	RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
 
-	/** Initializes the CPU, AHB and APB busses clocks
+	 /** Initializes the CPU, AHB and APB busses clocks
 	 */
 	RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
 	RCC_OscInitStruct.HSIState = RCC_HSI_ON;
@@ -422,7 +424,7 @@ static void MX_SPI1_Init(void) {
 	hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
 	hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
 	hspi1.Init.NSS = SPI_NSS_SOFT;
-	hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+	hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
 	hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
 	hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
 	hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -456,7 +458,7 @@ static void MX_TIM1_Init(void) {
 
 	/* USER CODE END TIM1_Init 1 */
 	htim1.Instance = TIM1;
-	htim1.Init.Prescaler = 15;
+	htim1.Init.Prescaler = 3;
 	htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
 	htim1.Init.Period = 254;
 	htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -771,11 +773,12 @@ int sw3_pressed() {
 }
 
 // CAN read
-void can_cmd_isr(uint8_t *data, uint8_t len, uint8_t from) {
+void can_cmd_isr(uint8_t *data, uint8_t len, uint8_t from, _Bool isBroadcast) {
 	// multiple CAN commands in one main cycle will drop and blink led2 quickly
 	if (canlen == 0) {
 		memcpy(canbuf, data, len);
 		canlen = len;
+		canbroadcast = isBroadcast;
 	} else {
 		led2_blink = 200;
 	}
@@ -798,6 +801,47 @@ void led1_flip() {
 }
 void led2_flip() {
 	Led2_GPIO_Port->ODR ^= Led2_Pin;
+}
+
+// Flash Load 
+void load_configurations() {
+	logu_s(LOGU_DEBUG, "Start loading config.");
+	if (!flash_load_machineid(&machine_id)) {
+		logu_f(LOGU_WARN, "No machine id stored in flash, using default: %u.", (uint32_t) machine_id);
+	} else {
+		logu_f(LOGU_INFO, "using machine id: %u.", (uint32_t)machine_id);
+	}
+	if (!flash_load_wifissid(wifi_conf_ssid)) {
+		logu_f(LOGU_WARN, "No WiFi ssid stored in flash, using default: %s.", wifi_conf_ssid);
+	} else {
+		logu_f(LOGU_INFO, "using ssid: %s.", wifi_conf_ssid);
+	}
+	if (!flash_load_wifipwd(wifi_conf_pwd)) {
+		logu_f(LOGU_WARN, "No WiFi pwd stored in flash, using default: %s.", wifi_conf_pwd);
+	} else {
+		logu_f(LOGU_INFO, "using wifi pwd: %s.", wifi_conf_pwd);
+	}
+	if (!flash_load_tcpip(wifi_conf_tcpip)) {
+		logu_f(LOGU_WARN, "No TCP Server IP stored in flash, using default: %s.", wifi_conf_tcpip);
+	} else {
+		logu_f(LOGU_INFO, "using tcp server ip: %s.", wifi_conf_tcpip);
+	}
+	if (!flash_load_tcpport(&wifi_conf_tcpport)) {
+		logu_f(LOGU_WARN, "No TCP Server Port stored in flash, using default: %hu.", wifi_conf_tcpport);
+	} else {
+		logu_f(LOGU_INFO, "using tcp server port: %hu.", wifi_conf_tcpport);
+	}
+	if (!flash_load_motorlimitin(&lm_conf_limit_in)) {
+		logu_f(LOGU_WARN, "No motor_limit_in stored in flash, using default: %d.", lm_conf_limit_in);
+	} else {
+		logu_f(LOGU_INFO, "using limit_in: %d.", lm_conf_limit_in);
+	}
+	if (!flash_load_motorlimitout(&lm_conf_limit_out)) {
+		logu_f(LOGU_WARN, "No motor_limit_out stored out flash, using default: %d.", lm_conf_limit_out);
+	} else {
+		logu_f(LOGU_INFO, "using limit_out: %d.", lm_conf_limit_out);
+	}
+	logu_s(LOGU_DEBUG, "Finish loading config.");
 }
 
 /* USER CODE END 4 */

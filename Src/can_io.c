@@ -23,10 +23,12 @@ void can_set_replylistener(CAN_ReplyListener lis) {
 }
 
 #define CMD_HEADER 0x000
+#define BROADCAST_HEADER 0x100
 #define REPLY_OK_HEADER 0x700
 #define REPLY_BAD_HEADER 0x300
 void can_set_id(uint8_t id) {
 	can_selfid = id;
+	// this filter has index 0 on FIFO0
 	CAN_FilterTypeDef filter1 = {
 		.FilterIdHigh = (CMD_HEADER + id) << 5,
 		.FilterIdLow = 0,
@@ -38,6 +40,7 @@ void can_set_id(uint8_t id) {
 		.FilterScale = CAN_FILTERSCALE_32BIT,
 		.FilterActivation = CAN_FILTER_ENABLE,
 	};
+	// this filter has index 0 on FIFO1
 	HAL_CAN_ConfigFilter(&hcan, &filter1);
 	CAN_FilterTypeDef filter2 = {
 		.FilterIdHigh = (REPLY_OK_HEADER + id) << 5,
@@ -51,12 +54,28 @@ void can_set_id(uint8_t id) {
 		.FilterActivation = CAN_FILTER_ENABLE,
 	};
 	HAL_CAN_ConfigFilter(&hcan, &filter2);
+	// this filter has index 1 on FIFO0
+	CAN_FilterTypeDef filter3 = {
+		.FilterIdHigh = (BROADCAST_HEADER) << 5,
+		.FilterIdLow = 0,
+		.FilterMaskIdHigh = 0xFFE0,
+		.FilterMaskIdLow = 0,
+		.FilterFIFOAssignment = CAN_FILTER_FIFO0,
+		.FilterBank = 2,
+		.FilterMode = CAN_FILTERMODE_IDMASK,
+		.FilterScale = CAN_FILTERSCALE_32BIT,
+		.FilterActivation = CAN_FILTER_ENABLE,
+	};
+	HAL_CAN_ConfigFilter(&hcan, &filter3);
 }
 
 // data must have 8 bytes can be read.
 HAL_StatusTypeDef can_send_cmd(uint8_t *data, uint8_t len, uint8_t to) {
 	CAN_TxHeaderTypeDef txh = {0};
-	txh.StdId = CMD_HEADER + to;
+	if(to == 0)
+		txh.StdId = BROADCAST_HEADER;
+	else
+		txh.StdId = CMD_HEADER + to;
 	txh.ExtId = (txh.StdId << 18) + can_selfid;
 	txh.IDE = CAN_ID_EXT;
 	txh.RTR = CAN_RTR_DATA;
@@ -83,7 +102,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *pcan) {
 	if (HAL_CAN_GetRxMessage(pcan, CAN_RX_FIFO0, &rxh, data) == HAL_OK) {
 		uint8_t from = (uint8_t)rxh.ExtId;
 		if(cmdlis) {
-			cmdlis(data, rxh.DLC, from);
+			cmdlis(data, rxh.DLC, from, rxh.FilterMatchIndex == 1);
 		}
 	}
 }

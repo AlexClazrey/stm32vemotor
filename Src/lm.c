@@ -11,6 +11,10 @@ void lm_init(struct lm_handle *handle) {
 	memset(handle, 0, sizeof(struct lm_handle));
 }
 
+void lm_tick(struct lm_handle* handle) {
+	handle->mod.pos = lm_read_pos();
+}
+
 int lm_hasspace(struct lm_handle *handle) {
 	if(handle == NULL)
 		return 0;
@@ -127,6 +131,13 @@ static int lm_commit_cmd(struct lm_cmd *cmd, volatile struct lm_model *model) {
 		logu_f(LOGU_TRACE, "LM move: %ld", cmd->pos_speed);
 		model->dir = cmd->pos_speed > 0;
 		model->state = lm_state_relapos;
-	}
+	} else if (cmd->type == lm_cmd_where) {
+		int32_t where = dSPIN_Get_Pos();
+		logu_f(LOGU_INFO, "Motor is now at: %d.", where);
+	} 
 	return 1;
+}
+
+int lm_read_pos() {
+	return dSPIN_Get_Pos();
 }

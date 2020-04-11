@@ -20,41 +20,8 @@
 /* Configuration 设置项目 */
 #include "config.h"
 
-// 这个是机器编号，只能是一个字节。
-extern uint8_t machine_id;
-
-// 移动到比例位置的时候使用的范围。
-extern const int lm_limit_out;
-extern const int lm_limit_in;
-
-// 电机循环测试配置
-extern const int lm_cycle_out;
-extern const int lm_cycle_in;
-// 1的时候只有跑完一整个测试循环，点击在最里面的位置才会暂停一会儿，
-// 0的时候在测试里的每一步都会暂停一会儿。
-extern int lm_cycle_pause_at_full_cycle;
-extern int lm_cycle_step_pause;
-
-// CAN 命令参数
-extern const uint8_t CAN_CMD_VER;
-extern const uint8_t CAN_CMD_LM;
-extern const uint8_t CAN_CMD_STRING;
-
-#if WIFI_ENABLE == 1
-// WIFI 连接设置
-extern char *WIFI_SSID;
-extern char *WIFI_PWD;
-extern char *WIFI_TCP_IP;
-extern uint16_t WIFI_TCP_PORT;
-
-#endif
-
 #ifndef UART_INPUT_BUF_SIZE 
 #define UART_INPUT_BUF_SIZE 300
-#endif
-
-#ifndef cmd_length_limit 
-#define cmd_length_limit 40
 #endif
 
 #if WIFI_ENABLE == 1
@@ -203,7 +170,7 @@ void uart_user_inputbuf_read(struct lm_handle *plmhandle) {
 
 HAL_StatusTypeDef cmd_can_send(struct cmd *cmd);
 static HAL_StatusTypeDef cmd_cansendfeedback(enum cmdfrom from, HAL_StatusTypeDef send_res);
-static void cmd_action(struct cmd* cmd, struct lm_handle* plmh);
+static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh);
 static enum inputcmdtype cmd_read_act(const char *src, struct lm_handle *plmh, enum cmdfrom from, int suppress_error) {
 	struct cmd cmd = { 0 };
 	// any input will turn off motor cycle test
@@ -228,8 +195,7 @@ static enum inputcmdtype cmd_read_act(const char *src, struct lm_handle *plmh, e
 		HAL_Delay(1); // TODO 这里强行停顿不太好，但是CAN SEND需要一点时间。
 		input_feedback(from, hs == HAL_OK);
 	} else {
-		cmd_action(&cmd, plmh);
-		input_feedback(from, true);
+		input_feedback(from, cmd_action(&cmd, plmh));
 	}
 	return type;
 }
@@ -261,16 +227,21 @@ static void cmd2lmcmd(struct cmd* cmd, struct lm_cmd* lmcmd) {
 		break;
 		case cmd_motor_percent:
 		lmcmd->type = lm_cmd_pos;
-		lmcmd->pos_speed = (int) ((double) cmd->motorcmd.percent * (lm_limit_out - lm_limit_in) / 100 + lm_limit_in);
+		lmcmd->pos_speed = (int) ((double) cmd->motorcmd.percent * (lm_conf_limit_out - lm_conf_limit_in) / 100 + lm_conf_limit_in);
+		break;
+		case cmd_motor_where:
+		lmcmd->type = lm_cmd_where;
 		break;
 		default:
 		logu_f(LOGU_ERROR, "unknown cmd convert: %d.", (int)cmd->type);
 	}
 }
 
-static void cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
+// return true for success
+static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 	struct lm_cmd lmcmd = {0};
-	// any input except mcycle will turn off motor cycle test
+	int32_t target;
+	// any input except "mcycle" will turn off motor cycle test
 	if (lm_cycle) {
 		logu_f(LOGU_INFO, "Cycle off.");
 		lm_cycle = 0;
@@ -283,13 +254,20 @@ static void cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 		case cmd_motor_pos:
 		case cmd_motor_relapos:
 		case cmd_motor_percent:
+		case cmd_motor_where:
 		cmd2lmcmd(cmd, &lmcmd);
 		lm_append_cmd(plmh, &lmcmd);
 		break;
 		case cmd_setting_id:
+		if(cmd->settingcmd.machine_id == 0) {
+			logu_s(LOGU_ERROR, "Machine id can't be 0.");
+			return 0;
+		}
+		if(flash_save_machineid(cmd->settingcmd.machine_id) != HAL_OK) {
+			return 0;
+		}
 		machine_id = cmd->settingcmd.machine_id;
 		can_set_id(machine_id);
-		flash_save_machineid(machine_id);
 		break;
 		case cmd_setting_mcycle:
 		lm_cycle = !lm_cycle;
@@ -300,14 +278,41 @@ static void cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 			lm_append_cmd(plmh, &lmcmd);
 		}
 		break;
+		case cmd_setting_lm_limit_in:
+		if(cmd->settingcmd.lm_limit_in != UINT32_MAX) {
+			target = cmd->settingcmd.lm_limit_in;
+		} else {
+			target = lm_read_pos();
+		}
+		if(flash_save_motor_limit_in(target) != HAL_OK) {
+			return 0;
+		}
+		lm_conf_limit_in = target;
+		break;
+		case cmd_setting_lm_limit_out:
+		if(cmd->settingcmd.lm_limit_out != UINT32_MAX) {
+			target = cmd->settingcmd.lm_limit_out;
+		} else {
+			target = lm_read_pos();
+		}
+		if(flash_save_motor_limit_out(target) != HAL_OK) {
+			return 0;
+		}
+		lm_conf_limit_out = target;
+		break;
+		case cmd_setting_load:
+		load_configurations();
+		break;
 		case cmd_wifi_check:
 		case cmd_wifi_auto:
 		case cmd_wifi_join:
 		case cmd_wifi_leave:
 		case cmd_wifi_tcp_connect:
 		case cmd_wifi_tcp_drop:
-		// TODO wifi mock
-		// wifi command 在 parse 的时候直接执行了
+		case cmd_wifi_setap:
+		case cmd_wifi_settcp:
+		case cmd_wifi_dummy:
+		// TODO wifi command 在 parse 的时候直接执行了，这里永远返回 true
 		break;
 		case cmd_led_color:
 		led_set(cmd->ledcmd.red, cmd->ledcmd.green, cmd->ledcmd.blue);
@@ -315,6 +320,7 @@ static void cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 		default:
 		logu_f(LOGU_ERROR, "Action unknown cmd: %d.", (int)cmd->type);
 	}
+	return 1;
 }
 
 static void wifi_send_tasklist(const char *str, int normalmode);
@@ -422,21 +428,21 @@ static char wifiscanip[64];
 // return 4: led command
 static int cmd_parse_body(const char *cmd, struct cmd *store) {
 	if (cmd[0] == 'm') {
-		if (strncmp(cmd + 1, "cycle", 5) == 0) {
+		if (strncmp(cmd + 1, "cycle", 6) == 0) {
 			store->type = cmd_setting_mcycle;
 			return 2;
-		} else if (strncmp(cmd + 1, "home", 4) == 0) {
+		} else if (strncmp(cmd + 1, "home", 5) == 0) {
 			store->type = cmd_motor_set_home;
-		} else if (strncmp(cmd + 1, "reset", 5) == 0) {
+		} else if (strncmp(cmd + 1, "reset", 6) == 0) {
 			store->type = cmd_motor_reset;
 		} else if (strncmp(cmd + 1, "id ", 3) == 0) {
 			uint16_t id;
 			store->type = cmd_setting_id;
-			if (sscanf(cmd + 4, "%hu", &id) == 1 && id < 256) {
+			if (sscanf(cmd + 4, "%hu", &id) == 1 && id < 256 && id > 0) {
 				store->settingcmd.machine_id = id;
 				return 2;
 			} else {
-				logu_s(LOGU_ERROR, "Read Machine Id Error, should between 0 and 255.");
+				logu_s(LOGU_ERROR, "Read Machine Id Error, should between 1 and 255.");
 				return 1;
 			}
 		} else if (cmd[1] == 'r' && cmd[2] == ' ') {
@@ -449,7 +455,7 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 			store->type = cmd_motor_speed;
 			store->motorcmd.pos = pos;
 			store->motorcmd.dir = dir;
-		} else if (cmd[1] == 's') {
+		} else if (cmd[1] == 's' && cmd[2] == '\0') {
 			store->type = cmd_motor_stop;
 		} else if (cmd[1] == 'p') {
 			if (cmd[2] == ' ') {
@@ -477,6 +483,16 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 					return 1;
 				}
 			}
+		} else if (strncmp(cmd + 1, "setout", 7) == 0) {
+			store->type = cmd_setting_lm_limit_out;
+			store->settingcmd.lm_limit_out = UINT32_MAX;
+		} else if (strncmp(cmd + 1, "setin", 6) == 0) {
+			store->type = cmd_setting_lm_limit_in;
+			store->settingcmd.lm_limit_in = UINT32_MAX;
+		} else if (strncmp(cmd + 1, "load", 5) == 0) {
+			store->type = cmd_setting_load;
+		} else if (strncmp(cmd + 1, "where", 6) == 0) {
+			store->type = cmd_motor_where;
 		} else {
 			logu_s(LOGU_ERROR, "Command parse failed");
 			return 1;
@@ -486,14 +502,17 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 		// TODO 在 wifi 的 task 没有完全释放的时候不要执行下一个命令
 		// 应该向上Log wifi busy这句话
 		if (strncmp(cmd + 1, "at", 3) == 0) {
+			store->type = cmd_wifi_check;
 			wifi_task_add(&hwifi, wifi_checkat);
 		} else if (strncmp(cmd + 1, "auto", 5) == 0) {
 			// set up wifi
+			store->type = cmd_wifi_auto;
 			wifi_autosetup_tasklist();
 		} else if (strncmp(cmd + 1, "join", 4) == 0) {
+			store->type = cmd_wifi_join;
 			// join ap
 			if (cmd[1 + 4] == '\0') {
-				wifi_task_add_withargs(&hwifi, wifi_joinap_args, NULL, 2, (int[] ) { (int) WIFI_SSID, (int) WIFI_PWD });
+				wifi_task_add_withargs(&hwifi, wifi_joinap_args, NULL, 2, (int[] ) { (int) wifi_conf_ssid, (int) wifi_conf_pwd });
 			} else {
 				if (strlen(cmd) > 64) {
 					logu_s(LOGU_ERROR, "SSID and pwd are too long.");
@@ -508,17 +527,18 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 								(int) wifiscanpwd });
 			}
 		} else if (strncmp(cmd + 1, "tcp", 3) == 0) {
+			store->type = cmd_wifi_tcp_connect;
 			// tcp connect
 			if (cmd[1 + 3] == '\0') {
-				wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, NULL, 2, (int[] ) { (int) WIFI_TCP_IP,
-								(int) WIFI_TCP_PORT });
+				wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, NULL, 2, (int[] ) { (int) wifi_conf_tcpip,
+								(int) wifi_conf_tcpport });
 			} else {
 				if (strlen(cmd) > 64) {
 					logu_s(LOGU_ERROR, "IP and port are too long.");
 					return 1;
 				}
 				uint16_t wifiscanport;
-				int scnt = sscanf(cmd + 4, wifiscanip, &wifiscanport);
+				int scnt = sscanf(cmd + 4, "%s %hu", wifiscanip, &wifiscanport);
 				if (scnt != 2) {
 					logu_s(LOGU_ERROR, "IP or port parsed failed.");
 					return 1;
@@ -528,16 +548,59 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 			}
 		} else if (strncmp(cmd + 1, "send", 5) == 0) {
 			// start send and set serial input into raw mode
+			store->type = cmd_wifi_dummy;
 			wifi_task_add(&hwifi, wifi_startsend_unvarnished);
 			wifi_change_to_raw_when_success = 1;
 			logu_s(LOGU_WARN, "Start wifi pipe mode.");
 		} else if (strncmp(cmd + 1, "drop", 5) == 0) {
+			store->type = cmd_wifi_tcp_drop;
 			// tcp disconnect
 			wifi_task_add(&hwifi, wifi_dropsingleconn);
 		} else if (strncmp(cmd + 1, "leave", 6) == 0) {
+			store->type = cmd_wifi_leave;
 			// leave ap
 			wifi_task_add(&hwifi, wifi_leaveap);
+		} else if (strncmp(cmd + 1, "setap ", 6) == 0) {
+			store->type = cmd_wifi_setap;
+			char tmpssid[WIFI_STRSIZE], tmppwd[WIFI_STRSIZE];
+			if(sscanf(cmd + 7, "%s %s", tmpssid, tmppwd) != 2) {
+				logu_s(LOGU_ERROR, "Wifi AP input read error");
+				return 1;
+			}
+			// action part
+			if(flash_save_wifissid(tmpssid) != HAL_OK) {
+				logu_s(LOGU_ERROR, "Flash save wifi ssid error.");
+				return 1;
+			}
+			if(flash_save_wifipwd(tmppwd) != HAL_OK) {
+				logu_s(LOGU_ERROR, "Flash save wifi pwd error.");
+				return 1;
+			}
+			strncpy(wifi_conf_ssid, tmpssid, WIFI_STRSIZE);
+			strncpy(wifi_conf_pwd, tmppwd, WIFI_STRSIZE);
+			return 2;
+		} else if (strncmp(cmd + 1, "settcp ", 7) == 0) {
+			store->type = cmd_wifi_settcp;
+			char tmpip[WIFI_STRSIZE];
+			uint16_t tmpport;
+			if(sscanf(cmd + 8, "%s %hu", tmpip, &tmpport) != 2) {
+				logu_s(LOGU_ERROR, "Wifi tcp ip port input read error");
+				return 1;
+			}
+			// action part
+			if(flash_save_tcpip(tmpip) != HAL_OK) {
+				logu_s(LOGU_ERROR, "Flash save tcp ip error.");
+				return 1;
+			}
+			if(flash_save_tcpport(tmpport) != HAL_OK) {
+				logu_s(LOGU_ERROR, "Flash save tcp port error.");
+				return 1;
+			}
+			strncpy(wifi_conf_tcpip, tmpip, WIFI_STRSIZE);
+			wifi_conf_tcpport = tmpport;
+			return 2;
 		} else {
+			logu_s(LOGU_ERROR, "Unknown wifi commmand.");
 			return 1;
 		}
 		return 3;
@@ -659,10 +722,10 @@ void wifi_autosetup_tasklist() {
 	wifi_task_add(&hwifi, wifi_setmodewifi_client);
 	wifi_task_add(&hwifi, wifi_setsingleconn);
 	wifi_task_add(&hwifi, wifi_setmodetrans_normal);
-	wifi_task_add_withargs(&hwifi, wifi_joinap_args, wifi_autosetup_joinap_taskname, 2, (int[] ) { (int) WIFI_SSID,
-					(int) WIFI_PWD });
-	wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, wifi_autosetup_tcpconn_taskname, 2, (int[] ) { (int) WIFI_TCP_IP,
-					(int) WIFI_TCP_PORT });
+	wifi_task_add_withargs(&hwifi, wifi_joinap_args, wifi_autosetup_joinap_taskname, 2, (int[] ) { (int) wifi_conf_ssid,
+					(int) wifi_conf_pwd });
+	wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, wifi_autosetup_tcpconn_taskname, 2, (int[] ) { (int) wifi_conf_tcpip,
+					(int) wifi_conf_tcpport });
 	wifi_send_tasklist(wifi_autosetup_greet_buf, 0);
 	// 怎么做TASK失败的条件跳转？你可以在后面设置一个程序状态字寄存器，这样看上去就像虚拟机了。
 	// 我现在用的是TASK失败在回调函数里面处理的模式。
@@ -706,9 +769,11 @@ static void wifi_send_tasklist(const char *str, int normalmode) {
 }
 
 void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int index, int finished) {
-	if (finished && state == WRS_OK && wifi_change_to_raw_when_success) {
-		wifi_pipe_raw = 1;
+	if (finished && wifi_change_to_raw_when_success) {
 		wifi_change_to_raw_when_success = 0;
+		if(state == WRS_OK) {
+			wifi_pipe_raw = 1;
+		}
 	}
 	// 对于一些任务的完成，做个别变化处理。
 	const char *tasksname = wifi_task_getlistname(phwifi);
@@ -766,6 +831,7 @@ HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 		case cmd_motor_pos:
 		case cmd_motor_relapos:
 		case cmd_motor_percent:
+		case cmd_motor_where:
 		msg[2] = (uint8_t)cmd->motorcmd.pos;
 		msg[3] = (uint8_t)(cmd->motorcmd.pos >> 8);
 		msg[4] = (uint8_t)(cmd->motorcmd.pos >> 16);
@@ -776,12 +842,25 @@ HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 		msg[2] = cmd->settingcmd.machine_id;
 		break;
 		case cmd_setting_mcycle:
+		break;
+		case cmd_setting_lm_limit_in:
+		case cmd_setting_lm_limit_out:
+		msg[2] = (uint8_t)cmd->settingcmd.lm_limit_in;
+		msg[3] = (uint8_t)cmd->settingcmd.lm_limit_in >> 8;
+		msg[4] = (uint8_t)cmd->settingcmd.lm_limit_in >> 16;
+		msg[5] = (uint8_t)cmd->settingcmd.lm_limit_in >> 24;
+		break;
+		case cmd_setting_load:
+		break;
 		case cmd_wifi_check:
 		case cmd_wifi_auto:
 		case cmd_wifi_join:
 		case cmd_wifi_leave:
 		case cmd_wifi_tcp_connect:
 		case cmd_wifi_tcp_drop:
+		case cmd_wifi_setap:
+		case cmd_wifi_settcp:
+		case cmd_wifi_dummy:
 		break;
 		case cmd_led_color:
 		msg[2] = cmd->ledcmd.red;
@@ -794,7 +873,7 @@ HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 	return can_send_cmd(msg, 8, cmd->receiver);
 }
 
-int cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
+_Bool cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
 	cmd->sender = data[0];
 	cmd->type = (enum cmdtype)data[1];
 	switch(cmd->type) {
@@ -805,6 +884,7 @@ int cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
 		case cmd_motor_pos:
 		case cmd_motor_relapos:
 		case cmd_motor_percent:
+		case cmd_motor_where:
 		cmd->motorcmd.pos = data[2] + (data[3] << 8) + (data[4] << 16) + (data[5] << 24);
 		cmd->motorcmd.dir = data[6];
 		break;
@@ -812,12 +892,22 @@ int cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
 		cmd->settingcmd.machine_id = data[2];
 		break;
 		case cmd_setting_mcycle:
+		break;
+		case cmd_setting_lm_limit_in:
+		case cmd_setting_lm_limit_out:
+		cmd->settingcmd.lm_limit_in = data[2] + (data[3] << 8) + (data[4] << 16) + (data[5] << 24);
+		break;
+		case cmd_setting_load:
+		break;
 		case cmd_wifi_check:
 		case cmd_wifi_auto:
 		case cmd_wifi_join:
 		case cmd_wifi_leave:
 		case cmd_wifi_tcp_connect:
 		case cmd_wifi_tcp_drop:
+		case cmd_wifi_setap:
+		case cmd_wifi_settcp:
+		case cmd_wifi_dummy:
 		break;
 		case cmd_led_color:
 		cmd->ledcmd.red = data[2];
@@ -826,16 +916,20 @@ int cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
 		break;
 		default:
 		logu_f(LOGU_ERROR, "CAN Unknown read cmd: %d.", (int)cmd->type);
-		return 1;
+		return 0;
 	}
-	return 0;
+	return 1;
 }
 
-void canbuf_read(char *data, size_t len, struct lm_handle *plmhandle) {
+void canbuf_read(char *data, size_t len, _Bool isbroadcast, struct lm_handle *plmhandle) {
 	struct cmd cmd = {0};
-	_Bool ok = cmd_can_read(data, len, &cmd) == 0;
-	cmd_action(&cmd, plmhandle);
-	can_send_reply(cmd.sender, ok);
+	_Bool ok = cmd_can_read(data, len, &cmd);
+	if(ok)
+		ok = cmd_action(&cmd, plmhandle);
+	// when receive a broadcast command, machine will only report error.
+	// when receive other commands, machine will report ok and error.
+	if(!isbroadcast || !ok)
+		can_send_reply(cmd.sender, ok);
 }
 
 // ----------

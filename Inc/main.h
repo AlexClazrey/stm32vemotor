@@ -62,6 +62,7 @@ int cn1_pressed();
 int sw2_pressed();
 int sw3_pressed();
 struct inputbuf *getuserbuf();
+void load_configurations();
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/

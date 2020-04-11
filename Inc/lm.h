@@ -30,6 +30,7 @@ enum lm_cmd_type {
 	lm_cmd_speed,
 	lm_cmd_pos,
 	lm_cmd_relapos,
+	lm_cmd_where,
 };
 
 struct lm_cmd {
@@ -47,11 +48,13 @@ struct lm_handle {
 };
 
 void lm_init(struct lm_handle *handle);
+void lm_tick(struct lm_handle* handle);
 int lm_hasspace(struct lm_handle *handle);
 int lm_append_cmd(struct lm_handle* handle, struct lm_cmd *cmd);
 int lm_append_newcmd(struct lm_handle* handle, enum lm_cmd_type type, int32_t pos_speed, uint8_t dir_hard);
 struct lm_cmd* lm_first(struct lm_handle *handle);
 struct lm_cmd* lm_pop(struct lm_handle *handle);
 int lm_commit(struct lm_handle *handle);
+int lm_read_pos();
 
 #endif

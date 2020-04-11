@@ -74,27 +74,27 @@ void dSPIN_Regs_Struct_Reset(dSPIN_RegsStruct_TypeDef* dSPIN_RegsStruct) {
 void L6470_Configuration1(void) {
 	/* 初始化L6470各寄存器初值 */
 	dSPIN_Regs_Struct_Reset(&dSPIN_RegsStruct);
-	/* 加速率的设置为466 steps/s2，范围14.55至59590 steps/s2*/
-	dSPIN_RegsStruct.ACC = AccDec_Steps_to_Par(800);										//466);
-	/* 减速率的设置为466 steps/s2，范围14.55至59590 steps/s2 */
-	dSPIN_RegsStruct.DEC = AccDec_Steps_to_Par(800);										//466);
-	/* 最大速度设置为488步/秒，最大速度设置范围为15.25至15610步/秒*/
-	dSPIN_RegsStruct.MAX_SPEED = MaxSpd_Steps_to_Par(600);
+	/* 加速率的设置为1000 steps/s2，范围14.55至59590 steps/s2*/
+	dSPIN_RegsStruct.ACC = AccDec_Steps_to_Par(1000);										//466);
+	/* 减速率的设置为1000 steps/s2，范围14.55至59590 steps/s2 */
+	dSPIN_RegsStruct.DEC = AccDec_Steps_to_Par(1000);										//466);
+	/* 最大速度设置为3000步/秒，最大速度设置范围为15.25至15610步/秒*/
+	dSPIN_RegsStruct.MAX_SPEED = MaxSpd_Steps_to_Par(3000);
 	/* 最小速度设置为0步/秒，取值范围为0至976.3，步骤/秒*/
 	dSPIN_RegsStruct.MIN_SPEED = MinSpd_Steps_to_Par(0);
-	/* 全步进速度设置252步/秒，范围为7.63到15625步/秒*/
-	dSPIN_RegsStruct.FS_SPD = FSSpd_Steps_to_Par(400);										//252);
+	/* 全步进速度设置2500步/秒，范围为7.63到15625步/秒*/
+	dSPIN_RegsStruct.FS_SPD = FSSpd_Steps_to_Par(2500);										//252);
 	/* 这里要注意不同型号的电机需要的占空比很不一样，需要调整下面的四个数字 */
 	/*保持占空比（转矩）设定为10％，范围在0到99.6％*/
 	dSPIN_RegsStruct.KVAL_HOLD = Kval_Perc_to_Par(10);
 	/* 运行占空比（转矩）设定为10％，范围在0到99.6％*/
 	dSPIN_RegsStruct.KVAL_RUN = Kval_Perc_to_Par(10);
-	/* 加速的占空比（转矩）设定为10％，范围在0到99.6％*/
+	/* 加速的占空比（转矩）设定为15％，范围在0到99.6％*/
 	dSPIN_RegsStruct.KVAL_ACC = Kval_Perc_to_Par(15);
-	/* 减速的占空比（转矩）设定为10％，范围在0到99.6％ */
+	/* 减速的占空比（转矩）设定为15％，范围在0到99.6％ */
 	dSPIN_RegsStruct.KVAL_DEC = Kval_Perc_to_Par(15);
 	/* 加速/减速曲线斜率的速度值。 range 0 to 3906 steps/s */
-	dSPIN_RegsStruct.INT_SPD = IntSpd_Steps_to_Par(200);									//200);
+	dSPIN_RegsStruct.INT_SPD = IntSpd_Steps_to_Par(500);									//200);
 	/* 加减速——开始斜率(反电动势)BEMF补偿设置 0 to 0.4% s/step */
 	dSPIN_RegsStruct.ST_SLP = BEMF_Slope_Perc_to_Par(0.038);
 	/* 加速度——结束斜率（反电动势）BEMF补偿设置 0 to 0.4% s/step */
@@ -106,7 +106,7 @@ void L6470_Configuration1(void) {
 	/* 过流阈值设置1500毫安 */
 	dSPIN_RegsStruct.OCD_TH = dSPIN_OCD_TH_2250mA; //375mA//750mA//1125mA//1500mA//1875mA//2250mA//2625mA//3000mA//3375mA//3750mA//4125mA//4500mA//4875mA//5250mA//5625mA//6000mA
 	/* 失速阈值设置至1000mA，范围：31.25 to 4000mA */
-	dSPIN_RegsStruct.STALL_TH = StallTh_to_Par(4000); //1000
+	dSPIN_RegsStruct.STALL_TH = StallTh_to_Par(1000); //1000
 	/* 设置到128微步模式 */
 	dSPIN_RegsStruct.STEP_MODE = dSPIN_STEP_SEL_1_128;
 	/* 报警设置 - 启用所有警报 */
@@ -139,30 +139,7 @@ uint8_t L6470_BUSY1(void) {
 	else
 		return 0x00;
 }
-///********************************************************************
-// * 函数说明：1号步进电机错误标志位
-// * 输    入：无
-// * 返    回：异常返回1，正常返回0无
-// ******************************************************************/
-//uint8_t L6470_FLAG1(void) {
-//	FLAG = GPIO_ReadInputDataBit(GPIOB, GPIO_PIN_13);
-//	if (FLAG == 0) {
-//		uint8_t dSPIN_rx_data = dSPIN_Get_Status();
-//		//while(L6470_BUSY1());
-//		dSPIN_Soft_Stop();
-//		//while(L6470_BUSY1());
-//		RS485_L;
-//		while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET)
-//			;
-//		USART_SendData(USART1, dSPIN_rx_data >> 8);
-//		while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET)
-//			;
-//		USART_SendData(USART1, dSPIN_rx_data);
-//		RS485_H;
-//		return 0x01;
-//	} else
-//		return 0x00;
-//}
+
 /********************************************************************
  * 函数说明：配置L6470各寄存器初值
  * 输    入：寄存器地址，对应的值
@@ -201,7 +178,7 @@ void dSPIN_Registers_Set(dSPIN_RegsStruct_TypeDef* dSPIN_RegsStruct) {
  ******************************************************************/
 void dSPIN_Nop(void) {
 	/* Send NOP operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_NOP);
+	dSPIN_Communicate_Byte(dSPIN_NOP);
 }
 
 /********************************************************************
@@ -214,7 +191,7 @@ void dSPIN_Nop(void) {
 void dSPIN_Set_Param(dSPIN_Registers_TypeDef param, uint32_t value) {
 	/* Send SetParam operation code to dSPIN */
 //	while(dSPIN_Busy_HW());
-	dSPIN_Write_Byte(dSPIN_SET_PARAM | param);
+	dSPIN_Communicate_Byte(dSPIN_SET_PARAM | param);
 	switch (param) {
 	case dSPIN_ABS_POS:
 		;
@@ -222,7 +199,7 @@ void dSPIN_Set_Param(dSPIN_Registers_TypeDef param, uint32_t value) {
 		;
 	case dSPIN_SPEED:
 		/* Send parameter - byte 2 to dSPIN */
-		dSPIN_Write_Byte((uint8_t) (value >> 16));
+		dSPIN_Communicate_Byte((uint8_t) (value >> 16));
 	case dSPIN_ACC:
 		;
 	case dSPIN_DEC:
@@ -239,10 +216,10 @@ void dSPIN_Set_Param(dSPIN_Registers_TypeDef param, uint32_t value) {
 		;
 	case dSPIN_STATUS:
 		/* Send parameter - byte 1 to dSPIN */
-		dSPIN_Write_Byte((uint8_t) (value >> 8));
+		dSPIN_Communicate_Byte((uint8_t) (value >> 8));
 	default:
 		/* Send parameter - byte 0 to dSPIN */
-		dSPIN_Write_Byte((uint8_t) (value));
+		dSPIN_Communicate_Byte((uint8_t) (value));
 	}
 }
 
@@ -258,42 +235,69 @@ uint32_t dSPIN_Get_Param(dSPIN_Registers_TypeDef param) {
 	uint32_t rx = 0;
 
 	/* Send GetParam operation code to dSPIN */
-	temp = dSPIN_Write_Byte(dSPIN_GET_PARAM | param);
+	temp = dSPIN_Communicate_Byte(dSPIN_GET_PARAM | param);
 	/* MSB which should be 0 */
 	temp = temp << 24;
 	rx |= temp;
 	switch (param) {
 	case dSPIN_ABS_POS:
-		;
+		rx |= dSPIN_Communicate_Byte(0) << 16;
+		rx |= dSPIN_Communicate_Byte(0) << 8;
+		rx |= dSPIN_Communicate_Byte(0);
+		break;
 	case dSPIN_MARK:
-		;
+		break;
 	case dSPIN_SPEED:
-		temp = dSPIN_Write_Byte((uint8_t) (0x00));
-		temp = temp << 16;
-		rx |= temp;
+		rx |= dSPIN_Communicate_Byte(0) << 16;
+		rx |= dSPIN_Communicate_Byte(0) << 8;
+		rx |= dSPIN_Communicate_Byte(0);
+		break;
 	case dSPIN_ACC:
-		;
+		break;
 	case dSPIN_DEC:
-		;
+		break;
 	case dSPIN_MAX_SPEED:
-		;
+		break;
 	case dSPIN_MIN_SPEED:
-		;
+		break;
 	case dSPIN_FS_SPD:
-		;
+		break;
 	case dSPIN_INT_SPD:
-		;
+		break;
 	case dSPIN_CONFIG:
-		;
+		break;
 	case dSPIN_STATUS:
-		temp = dSPIN_Write_Byte((uint8_t) (0x00));
+		temp = dSPIN_Communicate_Byte((uint8_t) (0x00));
 		temp = temp << 8;
 		rx |= temp;
+		break;
 	default:
-		temp = dSPIN_Write_Byte((uint8_t) (0x00));
+		temp = dSPIN_Communicate_Byte((uint8_t) (0x00));
 		rx |= temp;
+		break;
 	}
 	return rx;
+}
+
+// 把L6470各种长度的寄存器原始补码数据符号位左移成正常的32位数字。
+int32_t dSPIN_RegToInt(uint32_t raw, uint32_t len) {
+	int negative = raw >> (len - 1);
+	if(negative) {
+		// make an binary 1111100000 mask
+		int mask = (int32_t)(1u << 31);
+		mask >>= 32 - len;
+		return (int32_t)(raw | mask);
+	} else {
+		return (int32_t)raw;
+	}
+}
+
+/*******
+ * 获取目前的电机绝对位置
+*******/
+int32_t dSPIN_Get_Pos() {
+	uint32_t raw = dSPIN_Get_Param(dSPIN_ABS_POS);
+	return dSPIN_RegToInt(raw, 22);
 }
 
 /********************************************************************
@@ -306,13 +310,13 @@ uint32_t dSPIN_Get_Param(dSPIN_Registers_TypeDef param) {
  ******************************************************************/
 void dSPIN_Run(dSPIN_Direction_TypeDef direction, uint32_t speed) {
 	/* Send RUN operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_RUN | direction);
+	dSPIN_Communicate_Byte(dSPIN_RUN | direction);
 	/* Send speed - byte 2 data dSPIN */
-	dSPIN_Write_Byte((uint8_t) (speed >> 16));
+	dSPIN_Communicate_Byte((uint8_t) (speed >> 16));
 	/* Send speed - byte 1 data dSPIN */
-	dSPIN_Write_Byte((uint8_t) (speed >> 8));
+	dSPIN_Communicate_Byte((uint8_t) (speed >> 8));
 	/* Send speed - byte 0 data dSPIN */
-	dSPIN_Write_Byte((uint8_t) (speed));
+	dSPIN_Communicate_Byte((uint8_t) (speed));
 }
 
 /********************************************************************
@@ -327,13 +331,13 @@ void dSPIN_Run(dSPIN_Direction_TypeDef direction, uint32_t speed) {
  ******************************************************************/
 void dSPIN_Move(dSPIN_Direction_TypeDef direction, uint32_t n_step) {
 	/* Send Move operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_MOVE | direction);
+	dSPIN_Communicate_Byte(dSPIN_MOVE | direction);
 	/* Send n_step - byte 2 data dSPIN */
-	dSPIN_Write_Byte((uint8_t) (n_step >> 16));
+	dSPIN_Communicate_Byte((uint8_t) (n_step >> 16));
 	/* Send n_step - byte 1 data dSPIN */
-	dSPIN_Write_Byte((uint8_t) (n_step >> 8));
+	dSPIN_Communicate_Byte((uint8_t) (n_step >> 8));
 	/* Send n_step - byte 0 data dSPIN */
-	dSPIN_Write_Byte((uint8_t) (n_step));
+	dSPIN_Communicate_Byte((uint8_t) (n_step));
 }
 /********************************************************************
  * 函数说明：Reset Device 命令会复位L6470重新上电。
@@ -343,16 +347,16 @@ void dSPIN_Move(dSPIN_Direction_TypeDef direction, uint32_t n_step) {
  ******************************************************************/
 void dSPIN_Reset_Device(void) {
 	/* Send ResetDevice operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_RESET_DEVICE);
+	dSPIN_Communicate_Byte(dSPIN_RESET_DEVICE);
 }
 /********************************************************************
- * 函数说明：Reset_Pos命令会重置ABC_POS绝对位置为0，也是HOME位置
+ * 函数说明：Reset_Pos命令会重置ABS_POS绝对位置为0，也是HOME位置
  * 输    入：无
  * 返    回：无
  ******************************************************************/
 void dSPIN_Reset_Pos(void) {
 	/* Send ResetPos operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_RESET_POS);
+	dSPIN_Communicate_Byte(dSPIN_RESET_POS);
 }
 /********************************************************************
  * 函数说明：SoftStop命令会导致电机立即减速到零速，
@@ -366,7 +370,7 @@ void dSPIN_Reset_Pos(void) {
 // 这个函数不会漏电
 void dSPIN_Soft_Stop(void) {
 	/* Send SoftStop operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_SOFT_STOP);
+	dSPIN_Communicate_Byte(dSPIN_SOFT_STOP);
 }
 /********************************************************************
  * 函数说明：Hard_Stop命令会导致任意速度的电机立即停止。（无减速停止）
@@ -377,7 +381,7 @@ void dSPIN_Soft_Stop(void) {
  ******************************************************************/
 void dSPIN_Hard_Stop(void) {
 	/* Send HardStop operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_HARD_STOP);
+	dSPIN_Communicate_Byte(dSPIN_HARD_STOP);
 }
 /********************************************************************
  * 函数说明：SoftHiZ命令禁用电源桥（高阻抗状态）后减速到零,
@@ -390,7 +394,7 @@ void dSPIN_Hard_Stop(void) {
  ******************************************************************/
 void dSPIN_Soft_HiZ(void) {
 	/* Send SoftHiZ operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_SOFT_HIZ);
+	dSPIN_Communicate_Byte(dSPIN_SOFT_HIZ);
 }
 
 /********************************************************************
@@ -403,7 +407,7 @@ void dSPIN_Soft_HiZ(void) {
  ******************************************************************/
 void dSPIN_Hard_HiZ(void) {
 	/* Send HardHiZ operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_HARD_HIZ);
+	dSPIN_Communicate_Byte(dSPIN_HARD_HIZ);
 }
 /********************************************************************
  * 函数说明：getStatus命令读取Status状态寄存器的值。
@@ -418,13 +422,13 @@ uint16_t dSPIN_Get_Status(void) {
 	uint16_t rx = 0;
 
 	/* Send GetStatus operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_GET_STATUS);
+	dSPIN_Communicate_Byte(dSPIN_GET_STATUS);
 	/* Send zero byte / receive MSByte from dSPIN */
-	temp = dSPIN_Write_Byte((uint8_t) (0x00));
+	temp = dSPIN_Communicate_Byte((uint8_t) (0x00));
 	temp = temp << 8;
 	rx |= temp;
 	/* Send zero byte / receive LSByte from dSPIN */
-	temp = dSPIN_Write_Byte((uint8_t) (0x00));
+	temp = dSPIN_Communicate_Byte((uint8_t) (0x00));
 	rx |= temp;
 	return rx;
 }
@@ -439,7 +443,7 @@ uint16_t dSPIN_Get_Status(void) {
  ******************************************************************/
 void dSPIN_Go_Mark(void) {
 	/* Send GoMark operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_GO_MARK);
+	dSPIN_Communicate_Byte(dSPIN_GO_MARK);
 }
 /********************************************************************
  * 函数说明：GoHome命令将以最短路径运行到零位置
@@ -452,7 +456,7 @@ void dSPIN_Go_Mark(void) {
  ******************************************************************/
 void dSPIN_Go_Home(void) {
 	/* Send GoHome operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_GO_HOME);
+	dSPIN_Communicate_Byte(dSPIN_GO_HOME);
 }
 
 /********************************************************************
@@ -464,13 +468,13 @@ void dSPIN_Go_Home(void) {
  ******************************************************************/
 void dSPIN_Go_To(uint32_t abs_pos) {
 	/* 发送 GoTo 操作码到L6470 */
-	dSPIN_Write_Byte(dSPIN_GO_TO);
+	dSPIN_Communicate_Byte(dSPIN_GO_TO);
 	/* 发送绝对位置第2字节 - byte 2 data to L6470 */
-	dSPIN_Write_Byte((uint8_t) (abs_pos >> 16));
+	dSPIN_Communicate_Byte((uint8_t) (abs_pos >> 16));
 	/* 发送绝对位置第1字节 - byte 2 data to L6470  */
-	dSPIN_Write_Byte((uint8_t) (abs_pos >> 8));
+	dSPIN_Communicate_Byte((uint8_t) (abs_pos >> 8));
 	/* 发送绝对位置第0字节 - byte 2 data to L6470  */
-	dSPIN_Write_Byte((uint8_t) (abs_pos));
+	dSPIN_Communicate_Byte((uint8_t) (abs_pos));
 }
 /********************************************************************
  * 函数说明：Go_To_Dir(FWD/REV,ABC_POS)命令，驱动电机到绝对位置。Go_HOME函数返回绝对位置
@@ -481,13 +485,13 @@ void dSPIN_Go_To(uint32_t abs_pos) {
  ******************************************************************/
 void dSPIN_Go_To_Dir(dSPIN_Direction_TypeDef direction, uint32_t abs_pos) {
 	/* Send GoTo_DIR operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_GO_TO_DIR | direction);
+	dSPIN_Communicate_Byte(dSPIN_GO_TO_DIR | direction);
 	/* Send absolute position parameter - byte 2 data to dSPIN */
-	dSPIN_Write_Byte((uint8_t) (abs_pos >> 16));
+	dSPIN_Communicate_Byte((uint8_t) (abs_pos >> 16));
 	/* Send absolute position parameter - byte 1 data to dSPIN */
-	dSPIN_Write_Byte((uint8_t) (abs_pos >> 8));
+	dSPIN_Communicate_Byte((uint8_t) (abs_pos >> 8));
 	/* Send absolute position parameter - byte 0 data to dSPIN */
-	dSPIN_Write_Byte((uint8_t) (abs_pos));
+	dSPIN_Communicate_Byte((uint8_t) (abs_pos));
 }
 
 /**
@@ -497,7 +501,7 @@ void dSPIN_Go_To_Dir(dSPIN_Direction_TypeDef direction, uint32_t abs_pos) {
  */
 void dSPIN_Step_Clock(dSPIN_Direction_TypeDef direction) {
 	/* Send StepClock operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_STEP_CLOCK | direction);
+	dSPIN_Communicate_Byte(dSPIN_STEP_CLOCK | direction);
 }
 /**
  * @brief  Issues dSPIN Go Until command.
@@ -507,13 +511,13 @@ void dSPIN_Step_Clock(dSPIN_Direction_TypeDef direction) {
 void dSPIN_Go_Until(dSPIN_Action_TypeDef action,
 		dSPIN_Direction_TypeDef direction, uint32_t speed) {
 	/* Send GoUntil operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_GO_UNTIL | action | direction);
+	dSPIN_Communicate_Byte(dSPIN_GO_UNTIL | action | direction);
 	/* Send speed parameter - byte 2 data to dSPIN */
-	dSPIN_Write_Byte((uint8_t) (speed >> 16));
+	dSPIN_Communicate_Byte((uint8_t) (speed >> 16));
 	/* Send speed parameter - byte 1 data to dSPIN */
-	dSPIN_Write_Byte((uint8_t) (speed >> 8));
+	dSPIN_Communicate_Byte((uint8_t) (speed >> 8));
 	/* Send speed parameter - byte 0 data to dSPIN */
-	dSPIN_Write_Byte((uint8_t) (speed));
+	dSPIN_Communicate_Byte((uint8_t) (speed));
 }
 
 /**
@@ -524,7 +528,7 @@ void dSPIN_Go_Until(dSPIN_Action_TypeDef action,
 void dSPIN_Release_SW(dSPIN_Action_TypeDef action,
 		dSPIN_Direction_TypeDef direction) {
 	/* Send ReleaseSW operation code to dSPIN */
-	dSPIN_Write_Byte(dSPIN_RELEASE_SW | action | direction);
+	dSPIN_Communicate_Byte(dSPIN_RELEASE_SW | action | direction);
 }
 /********************************************************************
  * 函数说明：检测L6470硬件忙寄存器
@@ -552,14 +556,13 @@ uint8_t dSPIN_Busy_SW(void) {
  * 输    入：发送字节
  * 返    回：接收字节
  ******************************************************************/
-uint8_t dSPIN_Write_Byte(uint8_t byte) {
+uint8_t dSPIN_Communicate_Byte(uint8_t byte) {
 	uint8_t rec;
 	// 片选信号 - 低
 	HAL_GPIO_WritePin(dSPIN_nSS_Port, dSPIN_nSS_Pin, GPIO_PIN_RESET);
-	// 发送一个字节 五毫秒超时
-	HAL_SPI_Transmit(dSPIN_SPI, &byte, 1, 1);
+	// 发送一个字节 一毫秒超时
+	HAL_SPI_TransmitReceive(dSPIN_SPI, &byte, &rec, 1, 1);
 	// 片选信号 - 高
 	HAL_GPIO_WritePin(dSPIN_nSS_Port, dSPIN_nSS_Pin, GPIO_PIN_SET);
-	HAL_SPI_Receive(dSPIN_SPI, &rec, 1, 1);
 	return rec;
 }

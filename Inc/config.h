@@ -5,25 +5,17 @@
 /* 以下是设置项目，在config.c里还有一部分 Configurations Start */
 
 // WIFI 模块是否加载
-#define WIFI_ENABLE 0
+#define WIFI_ENABLE 1
 
 // 初始化的时候要做的事情。
-#define INIT_MOTOR_MOVE 0
-#define INIT_WIFI_CONNECT 0
+#define INIT_MOTOR_MOVE 1
+#define INIT_WIFI_CONNECT 1
 
 // WiFi每十秒发送一句问好
 #define WIFI_GREET 0
 
-
-// 串口
-// 考虑到 115200 11.5B/ms 那么一个主循环的约10ms不会超过140B
-// 现在的触发器有缓冲区一半填满，全部填满，和IDLE接受完成三个地方，
-// 这些触发器会修改Flag在主循环里面通过检查flag再读入缓冲。
-// 我们设置成两个主循环的大小不会丢失数据。
-#define UART_INPUT_BUF_SIZE 301
-#define UART_INPUT_DMA_READ_RANGE 300
-// 串口命令长度设置
-#define cmd_length_limit 40
+// WiFi Length Limit
+#define WIFI_STRSIZE 40
 
 // Tick Report
 //#define CYCLETICK_REPORT
@@ -31,6 +23,22 @@
 //#define LOG_TXCPLT_REPORT
 
 extern uint8_t machine_id;
+extern char wifi_conf_ssid[WIFI_STRSIZE];
+extern char wifi_conf_pwd[WIFI_STRSIZE];
+extern char wifi_conf_tcpip[WIFI_STRSIZE];
+extern uint16_t wifi_conf_tcpport;
+
+extern int32_t lm_conf_limit_out;
+extern int32_t lm_conf_limit_in;
+
+// 电机循环测试配置
+extern int lm_cycle_out;
+extern int lm_cycle_in;
+// 1的时候只有跑完一整个测试循环，点击在最里面的位置才会暂停一会儿，
+// 0的时候在测试里的每一步都会暂停一会儿。
+extern int lm_cycle_pause_at_full_cycle;
+extern int lm_cycle_step_pause;
+
 
 /* 以上是设置项目 Configurations End */
 

@@ -5,7 +5,7 @@
 
 extern uint32_t can_tx_mailbox_used;
 
-typedef void(*CAN_CmdListener)(uint8_t* data, uint8_t len, uint8_t from);
+typedef void(*CAN_CmdListener)(uint8_t* data, uint8_t len, uint8_t from, _Bool isBroadcast);
 typedef void(*CAN_ReplyListener)(_Bool ok, uint8_t from);
 
 void can_init(uint8_t selfid);

@@ -35,9 +35,13 @@
 #define INPUTBUF_MEM_HEAP (INPUTBUF_MEM_MODE == INPUTBUF_HEAP)
 
 #if INPUTBUF_MEM_STACK
+// 考虑到 115200 11.5B/ms 那么一个主循环的约10ms不会超过140B
+// 现在的触发器有缓冲区一半填满，全部填满，和IDLE接受完成三个地方，
+// 这些触发器会修改Flag在主循环里面通过检查flag再读入缓冲。
+// 我们设置成两个主循环的大小不会丢失数据。
 // 当它是栈内存模式时，在这里设置使用的参数
 #ifndef INPUTBUF_BUFSIZE 
-#define INPUTBUF_BUFSIZE  100
+#define INPUTBUF_BUFSIZE  300
 #endif
 #ifndef INPUTBUF_DMA_RANGE
 #define INPUTBUF_DMA_RANGE INPUTBUF_BUFSIZE

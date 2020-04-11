@@ -1,11 +1,12 @@
 #include "config.h"
 
-// 这个是机器编号，只能是一个字节。0~255.
+// 这个是机器编号，只能是一个字节。1~255.
+// 不能使用 0 作为 id，那是一个广播编号。
 uint8_t machine_id = 128;
 
 // 移动到比例位置的时候使用的步数范围。
-int lm_limit_out = -110000;
-int lm_limit_in = -5000;
+int32_t lm_conf_limit_out = -110000;
+int32_t lm_conf_limit_in = -5000;
 
 // 电机循环测试
 int lm_cycle_out = -100000;
@@ -16,7 +17,7 @@ int lm_cycle_pause_at_full_cycle = 1;
 int lm_cycle_step_pause = 500;
 
 // WiFi 参数
-char* WIFI_SSID = "SSID";
-char* WIFI_PWD = "password";
-char* WIFI_TCP_IP = "192.168.1.100";
-uint16_t WIFI_TCP_PORT = 5577;
+char wifi_conf_ssid[WIFI_STRSIZE] = "ssid";
+char wifi_conf_pwd[WIFI_STRSIZE] = "pwd";
+char wifi_conf_tcpip[WIFI_STRSIZE] = "192.168.0.103";
+uint16_t wifi_conf_tcpport = 5577;

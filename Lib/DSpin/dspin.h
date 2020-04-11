@@ -307,6 +307,7 @@ void dSPIN_Registers_Set(dSPIN_RegsStruct_TypeDef* dSPIN_RegsStruct);
 void dSPIN_Nop(void);
 void dSPIN_Set_Param(dSPIN_Registers_TypeDef param, uint32_t value);
 uint32_t dSPIN_Get_Param(dSPIN_Registers_TypeDef param);
+int32_t dSPIN_Get_Pos();
 void dSPIN_Run(dSPIN_Direction_TypeDef direction, uint32_t speed);
 void dSPIN_Step_Clock(dSPIN_Direction_TypeDef direction);
 void dSPIN_Move(dSPIN_Direction_TypeDef direction, uint32_t n_step);
@@ -333,7 +334,7 @@ uint8_t L6470_FLAG1(void);
 
 uint8_t L6470_BUSY1(void);
 
-uint8_t dSPIN_Write_Byte(uint8_t byte);
+uint8_t dSPIN_Communicate_Byte(uint8_t byte);
 
 #endif
 

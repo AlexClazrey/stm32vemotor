@@ -16,7 +16,7 @@ void wifi_tick_callback(Wifi_HandleTypeDef* phwifi, WifiRtnState state, int inde
 #endif
 
 void command_read(struct lm_handle* plmh);
-void canbuf_read(char *data, size_t len, struct lm_handle *plmhandle);
+void canbuf_read(char *data, size_t len, _Bool isbroadcast, struct lm_handle *plmhandle);
 
 // 在主循环里面调用这个，当 motor cycle 打开的时候这个函数负责发布命令
 void mcycle_cmd(struct lm_handle *plmh, uint32_t count);
@@ -30,14 +30,21 @@ enum cmdtype {
 	cmd_motor_pos,
 	cmd_motor_relapos,
 	cmd_motor_percent,
+	cmd_motor_where,
 	cmd_setting_id,
 	cmd_setting_mcycle,
+	cmd_setting_lm_limit_in,
+	cmd_setting_lm_limit_out,
+	cmd_setting_load,
 	cmd_wifi_check,
 	cmd_wifi_auto,
 	cmd_wifi_join,
 	cmd_wifi_leave,
 	cmd_wifi_tcp_connect,
 	cmd_wifi_tcp_drop,
+	cmd_wifi_setap,
+	cmd_wifi_settcp,
+	cmd_wifi_dummy,
 	cmd_led_color,
 };
 
@@ -62,7 +69,11 @@ struct cmd {
 			uint8_t blue;
 		} ledcmd;
 		struct {
-			uint8_t machine_id;
+			union {
+				uint8_t machine_id;
+				int32_t lm_limit_in;
+				int32_t lm_limit_out;
+			};
 		} settingcmd;
 	};
 	uint8_t receiver;
