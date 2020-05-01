@@ -32,17 +32,17 @@ static _Bool flash_load_string(uint32_t addr, char* dest, uint16_t limit);
 static HAL_StatusTypeDef flash_save_data(uint32_t addr, const char *data, uint16_t size);
 static HAL_StatusTypeDef flash_erase_save_data(uint32_t addr, const char* data, uint16_t size);
 
-_Bool flash_load_machineid(uint8_t *id) {
-    uint8_t tmpid = *(volatile uint8_t*)(MACHINE_ID_STORE);
-    if(tmpid == 0 || tmpid == 0xFF) {
+_Bool flash_load_machineid(uint16_t *id) {
+    uint16_t tmpid = *(volatile uint16_t*)(MACHINE_ID_STORE);
+    if(tmpid == 0 || tmpid == 0xFFFF) {
         return 0;
     } else {
     	*id = tmpid;
         return 1;
     }
 }
-HAL_StatusTypeDef flash_save_machineid(uint8_t id) {
-    return flash_erase_save_data(MACHINE_ID_STORE, (char*)&id, 1);
+HAL_StatusTypeDef flash_save_machineid(uint16_t id) {
+    return flash_erase_save_data(MACHINE_ID_STORE, (char*)&id, 2);
 }
 _Bool flash_load_wifissid(char* ssid) {
     return flash_load_string(WIFI_SSID_STORE, ssid, WIFI_STRSIZE);

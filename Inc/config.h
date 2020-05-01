@@ -22,7 +22,7 @@
 // Log Report
 //#define LOG_TXCPLT_REPORT
 
-extern uint8_t machine_id;
+extern uint16_t machine_id;
 extern char wifi_conf_ssid[WIFI_STRSIZE];
 extern char wifi_conf_pwd[WIFI_STRSIZE];
 extern char wifi_conf_tcpip[WIFI_STRSIZE];

@@ -4,8 +4,8 @@
 
 void flash_init();
 void flash_deinit();
-_Bool flash_load_machineid(uint8_t *id);
-HAL_StatusTypeDef flash_save_machineid(uint8_t id);
+_Bool flash_load_machineid(uint16_t *id);
+HAL_StatusTypeDef flash_save_machineid(uint16_t id);
 _Bool flash_load_wifissid(char* ssid);
 HAL_StatusTypeDef flash_save_wifissid(const char* ssid);
 _Bool flash_load_wifipwd(char* pwd);

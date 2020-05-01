@@ -2,7 +2,7 @@
 
 // 这个是机器编号，只能是一个字节。1~255.
 // 不能使用 0 作为 id，那是一个广播编号。
-uint8_t machine_id = 128;
+uint16_t machine_id = 128;
 
 // 移动到比例位置的时候使用的步数范围。
 int32_t lm_conf_limit_out = -110000;

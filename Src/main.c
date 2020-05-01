@@ -104,8 +104,8 @@ static void MX_TIM1_Init(void);
 void detect_cn1();
 void detect_sw2();
 void detect_sw3();
-void main_can_isr(uint8_t *data, uint8_t len, uint8_t from, _Bool is_broadcast);
-void can_reply_isr(_Bool ok, uint8_t from);
+void main_can_isr(uint8_t *data, uint8_t len, uint16_t from, _Bool is_broadcast);
+void can_reply_isr(_Bool ok, uint16_t from);
 void led1_flip();
 void led2_flip();
 void txcplt_report();
@@ -231,7 +231,7 @@ int main(void) {
 	while (1) {
 		cycletick_start();
 		if (led1_blink) {
-			if (cycletick_everyms(led1_blink)) { // 64 cycle
+			if (cycletick_everyms(led1_blink)) {
 				led1_flip();
 			}
 		}
@@ -764,11 +764,11 @@ int sw3_pressed() {
 }
 
 // CAN read
-void main_can_isr(uint8_t *data, uint8_t len, uint8_t from, _Bool is_broadcast) {
-	cmd_can_isr(data, len, from, is_broadcast, plmh);
+void main_can_isr(uint8_t *data, uint8_t len, uint16_t from, _Bool is_broadcast) {
+	cmd_can_isr((char*)data, len, from, is_broadcast, plmh);
 }
 
-void can_reply_isr(_Bool ok, uint8_t from) {
+void can_reply_isr(_Bool ok, uint16_t from) {
 	char buf[40];
 	char *st = ok ? "OK" : "FAIL";
 	int len = snprintf(buf, 40, "<#%hu %s>\r\n", from, st);

@@ -378,11 +378,11 @@ static enum inputcmdtype cmd_parse(const char *cmd, struct cmd *out_store) {
 	// if command has an receiver
 	if (cmd[0] == '#') {
 		size_t scanlen;
-		if (sscanf(++cmd, "%hu%n", &receiver, &scanlen) != 1 || receiver > 255) {
+		if (sscanf(++cmd, "%hu%n", &receiver, &scanlen) != 1 || receiver > 65535) {
 			logu_s(LOGU_ERROR, "Cmd id read error.");
 			return 1;
 		}
-		out_store->receiver = (uint8_t) receiver;
+		out_store->receiver = receiver;
 		out_store->sender = machine_id;
 		if (cmd[scanlen] == ' ') {
 			// 兼容ID后面有或者没有空格两种情况
@@ -438,11 +438,11 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 		} else if (strncmp(cmd + 1, "id ", 3) == 0) {
 			uint16_t id;
 			store->type = cmd_setting_id;
-			if (sscanf(cmd + 4, "%hu", &id) == 1 && id < 256 && id > 0) {
+			if (sscanf(cmd + 4, "%hu", &id) == 1 && id < 65536 && id > 0) {
 				store->settingcmd.machine_id = id;
 				return 2;
 			} else {
-				logu_s(LOGU_ERROR, "Read Machine Id Error, should between 1 and 255.");
+				logu_s(LOGU_ERROR, "Read Machine Id Error, should between 1 and 65535.");
 				return 1;
 			}
 		} else if (cmd[1] == 'r' && cmd[2] == ' ') {
@@ -730,7 +730,7 @@ void wifi_autosetup_tasklist() {
 	// 11. Exit send mode
 	// 12. check "AT"
 	logu_s(LOGU_INFO, "Start WiFi Auto Setup task list.");
-	snprintf(wifi_autosetup_greet_buf, 50, "Machine %hu greetings ($ a $).\r\n", (uint16_t) machine_id);
+	snprintf(wifi_autosetup_greet_buf, 50, "Machine %hu greetings ($ a $).\r\n", machine_id);
 	wifi_task_setlistname(&hwifi, wifi_autosetup_tasklist_name);
 	wifi_task_add(&hwifi, wifi_stopsend_unvarnished);
 	wifi_task_add(&hwifi, wifi_checkat);
@@ -752,7 +752,7 @@ static const char *wifi_greet1_tasklist_name = "Greet 1";
 static void wifi_greet1_tasklist() {
 	if (wifi_task_isempty(&hwifi)) {
 		logu_s(LOGU_INFO, "Start WiFi Greet 1 task list.");
-		snprintf(wifi_greet1_buf, 60, "Another ten seconds passed on machine %hu ($ _ $)\r\n", (uint16_t) machine_id);
+		snprintf(wifi_greet1_buf, 60, "Another ten seconds passed on machine %hu ($ _ $)\r\n", machine_id);
 		wifi_task_setlistname(&hwifi, wifi_greet1_tasklist_name);
 		wifi_send_tasklist(wifi_greet1_buf, 0);
 	}
@@ -837,7 +837,7 @@ static void wifi_send_tasklist(const char *str, int normalmode) {
 
 HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 	uint8_t msg[8] = {0};
-	// msg[0] is unused
+	// msg[0] is used in can_io for store MSB of self machine id.
 	msg[1] = (uint8_t)cmd->type;
 	switch(cmd->type) {
 		case cmd_motor_stop:
@@ -855,7 +855,8 @@ HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 		msg[6] = cmd->motorcmd.dir;
 		break;
 		case cmd_setting_id:
-		msg[2] = cmd->settingcmd.machine_id;
+		msg[2] = (uint8_t)cmd->settingcmd.machine_id;
+		msg[3] = (uint8_t)(cmd->settingcmd.machine_id >> 8);
 		break;
 		case cmd_setting_mcycle:
 		break;
@@ -893,7 +894,7 @@ HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 	return can_send_cmd(msg, 8, cmd->receiver);
 }
 
-_Bool cmd_can_read(char* data, uint8_t len, uint8_t from, struct cmd* cmd) {
+_Bool cmd_can_read(char* data, uint8_t len, uint16_t from, struct cmd* cmd) {
 	cmd->sender = from;
 	cmd->type = (enum cmdtype)data[1];
 	switch(cmd->type) {
@@ -909,7 +910,7 @@ _Bool cmd_can_read(char* data, uint8_t len, uint8_t from, struct cmd* cmd) {
 		cmd->motorcmd.dir = data[6];
 		break;
 		case cmd_setting_id:
-		cmd->settingcmd.machine_id = data[2];
+		cmd->settingcmd.machine_id = data[2] + (data[3] << 8);
 		break;
 		case cmd_setting_mcycle:
 		break;
@@ -944,7 +945,7 @@ _Bool cmd_can_read(char* data, uint8_t len, uint8_t from, struct cmd* cmd) {
 	return 1;
 }
 
-void cmd_can_isr(char *data, size_t len, uint8_t from, _Bool isbroadcast, struct lm_handle *plmhandle) {
+void cmd_can_isr(char *data, size_t len, uint16_t from, _Bool isbroadcast, struct lm_handle *plmhandle) {
 	struct cmd cmd = {0};
 	_Bool ok = cmd_can_read(data, len, from, &cmd);
 	if(ok)
