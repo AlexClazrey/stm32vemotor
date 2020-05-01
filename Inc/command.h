@@ -14,6 +14,7 @@ void wifi_autosetup_tasklist();
 void wifi_greet_1();
 void wifi_parse_cmd(struct lm_handle* plmh);
 void wifi_tick_callback(Wifi_HandleTypeDef* phwifi, WifiRtnState state, int index, int finished);
+void wifi_send_tasklist(const char *str, int normalmode);
 #endif
 
 void command_read(struct lm_handle* plmh);
@@ -37,6 +38,7 @@ enum cmdtype {
 	cmd_setting_lm_limit_in,
 	cmd_setting_lm_limit_out,
 	cmd_setting_load,
+	cmd_setting_show_id,
 	cmd_wifi_check,
 	cmd_wifi_auto,
 	cmd_wifi_join,
@@ -50,8 +52,15 @@ enum cmdtype {
 	cmd_led_color_grad_to,
 };
 
+enum cmdfrom {
+	CMD_FROM_NONE,
+	CMD_FROM_SERIAL,
+	CMD_FROM_WIFI,
+};
+
 struct cmd {
 	enum cmdtype type;
+	enum cmdfrom from;
 	union {
 		struct {
 			union {
@@ -79,6 +88,7 @@ struct cmd {
 	};
 	uint16_t receiver;
 	uint16_t sender;
+	
 };
 
 enum inputcmdtype {

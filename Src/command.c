@@ -38,10 +38,6 @@ static int lm_cycle = 0; // 循环测试开启指示
 static uint32_t lm_cycle_pause_count = 0; // 暂停的等待计数
 static uint32_t lm_cycle_speed_count = 0; // 在过热无反应时候的等待计数
 
-enum cmdfrom {
-	CMD_FROM_SERIAL, CMD_FROM_WIFI,
-};
-
 /* Functions */
 // ------------- Main Function
 void uart_user_inputbuf_read(struct lm_handle *plmh);
@@ -170,6 +166,7 @@ static HAL_StatusTypeDef cmd_cansendfeedback(enum cmdfrom from, HAL_StatusTypeDe
 static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh);
 static enum inputcmdtype cmd_read_act(const char *src, struct lm_handle *plmh, enum cmdfrom from, int suppress_error) {
 	struct cmd cmd = { 0 };
+	cmd.from = from;
 	// any input will turn off motor cycle test
 	if (lm_cycle) {
 		logu_f(LOGU_INFO, "Cycle off.");
@@ -234,9 +231,11 @@ static void cmd2lmcmd(struct cmd* cmd, struct lm_cmd* lmcmd) {
 	}
 }
 
+static void input_feedback_raw(enum cmdfrom from, char* cstr);
 // return true for success
 static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 	struct lm_cmd lmcmd = {0};
+	char idstr[12] = {0};
 	int32_t target;
 	// any input except "mcycle" will turn off motor cycle test
 	if (lm_cycle) {
@@ -265,6 +264,10 @@ static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 		}
 		machine_id = cmd->settingcmd.machine_id;
 		can_set_id(machine_id);
+		break;
+		case cmd_setting_show_id:
+		snprintf(idstr, 12, "<%hu>", machine_id);
+		input_feedback_raw(cmd->from, idstr);
 		break;
 		case cmd_setting_mcycle:
 		lm_cycle = !lm_cycle;
@@ -323,20 +326,21 @@ static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 	return 1;
 }
 
-static void wifi_send_tasklist(const char *str, int normalmode);
-static void input_feedback(enum cmdfrom from, int success) {
+static void input_feedback_raw(enum cmdfrom from, char* cstr) {
 	if (from == CMD_FROM_SERIAL) {
-		if (success) {
-			logu_raw("<OK>\r\n", 6);
-		} else {
-			logu_raw("<FAIL>\r\n", 8);
-		}
+		logu_raw(cstr, strlen(cstr));
 	} else if (from == CMD_FROM_WIFI) {
-		if (success) {
-			wifi_send_tasklist("<OK>\r\n", 0);
-		} else {
-			wifi_send_tasklist("<FAIL>\r\n", 0);
-		}
+		wifi_send_tasklist(cstr, 0);
+	} else {
+		logu_s(LOGU_WARN, "Can't feedback to CAN");
+		logu_raw(cstr, strlen(cstr));
+	}
+}
+static void input_feedback(enum cmdfrom from, int success) {
+	if (success) {
+		input_feedback_raw(from, "<OK>\r\n");
+	} else {
+		input_feedback_raw(from, "<FAIL>\r\n");
 	}
 }
 
@@ -620,6 +624,7 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 			logu_s(LOGU_ERROR, "Led brightness too high.");
 			return 1;
 		}
+		store->type = cmd_led_color;
 		store->ledcmd.color.r = r;
 		store->ledcmd.color.g = g;
 		store->ledcmd.color.b = b;
@@ -635,11 +640,19 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 			logu_s(LOGU_ERROR, "led brightness too high.");
 			return 1;
 		}
+		store->type = cmd_led_color_grad_to;
 		store->ledcmd.color.r = r;
 		store->ledcmd.color.g = g;
 		store->ledcmd.color.b = b;
 		store->ledcmd.ms = intv;
 		return 4;
+	} else if (cmd[0] == 's') {
+		if(strncmp(cmd + 1, "id", 2) == 0) {
+			store->type = cmd_setting_show_id;
+			return 2;
+		} else {
+			return 1;
+		}
 	} else {
 		logu_s(LOGU_ERROR, "Command parse failed");
 		return 1;
@@ -764,7 +777,7 @@ void wifi_greet_1() {
 }
 
 static const char *wifi_send_tasklist_name = "Standalone send";
-static void wifi_send_tasklist(const char *str, int normalmode) {
+void wifi_send_tasklist(const char *str, int normalmode) {
 	if (wifi_task_isempty(&hwifi) && wifi_task_getlistname(&hwifi) == NULL) {
 		wifi_task_setlistname(&hwifi, wifi_send_tasklist_name);
 	}
@@ -858,6 +871,8 @@ HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 		msg[2] = (uint8_t)cmd->settingcmd.machine_id;
 		msg[3] = (uint8_t)(cmd->settingcmd.machine_id >> 8);
 		break;
+		case cmd_setting_show_id:
+		break;
 		case cmd_setting_mcycle:
 		break;
 		case cmd_setting_lm_limit_in:
@@ -912,6 +927,8 @@ _Bool cmd_can_read(char* data, uint8_t len, uint16_t from, struct cmd* cmd) {
 		case cmd_setting_id:
 		cmd->settingcmd.machine_id = data[2] + (data[3] << 8);
 		break;
+		case cmd_setting_show_id:
+		break;
 		case cmd_setting_mcycle:
 		break;
 		case cmd_setting_lm_limit_in:
@@ -947,6 +964,7 @@ _Bool cmd_can_read(char* data, uint8_t len, uint16_t from, struct cmd* cmd) {
 
 void cmd_can_isr(char *data, size_t len, uint16_t from, _Bool isbroadcast, struct lm_handle *plmhandle) {
 	struct cmd cmd = {0};
+	logu_s(LOGU_INFO, "CAN Receive a command.");
 	_Bool ok = cmd_can_read(data, len, from, &cmd);
 	if(ok)
 		ok = cmd_action(&cmd, plmhandle);

@@ -774,6 +774,9 @@ void can_reply_isr(_Bool ok, uint16_t from) {
 	int len = snprintf(buf, 40, "<#%hu %s>\r\n", from, st);
 	if (len > 0 && len < 40) {
 		logu_raw(buf, len);
+		#if WIFI_ENABLE == 1
+		wifi_send_tasklist(buf, 0);
+		#endif
 	} else {
 		led2_blink = 1000;
 	}
