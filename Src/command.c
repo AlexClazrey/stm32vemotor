@@ -53,9 +53,6 @@ void command_read(struct lm_handle *plmhandle) {
 // ------------- Switch Process
 int sw2_previous = 0, sw3_previous = 0;
 int sw23_count = 0;
-struct rgb {
-	uint8_t r,g,b;
-};
 static struct rgb hue_to_rgb(uint16_t hue, uint8_t sat, uint8_t val);
 void command_switch_read(struct lm_handle *plmhandle) {
 	if(sw2_pressed() && sw3_pressed()) {
@@ -65,7 +62,7 @@ void command_switch_read(struct lm_handle *plmhandle) {
 			sw23_count++;
 		// treat sw23 as hue
 		struct rgb color = hue_to_rgb(sw23_count % 360, 100, 100);
-		led_set(color.r, color.g, color.b);
+		led_set(&color);
 	} else if (sw2_pressed()) {
 		if(!sw2_previous)
 			lm_append_newcmd(plmhandle, lm_cmd_speed, 20000, 0);
@@ -315,7 +312,10 @@ static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 		// TODO wifi command 在 parse 的时候直接执行了，这里永远返回 true
 		break;
 		case cmd_led_color:
-		led_set(cmd->ledcmd.red, cmd->ledcmd.green, cmd->ledcmd.blue);
+		led_set(&(cmd->ledcmd.color));
+		break;
+		case cmd_led_color_grad_to:
+		led_gradient_to(&(cmd->ledcmd.color), cmd->ledcmd.ms);
 		break;
 		default:
 		logu_f(LOGU_ERROR, "Action unknown cmd: %d.", (int)cmd->type);
@@ -609,9 +609,9 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 		return 1;
 #endif
 
-	} else if (strncmp(cmd, "led", 3) == 0) {
+	} else if (strncmp(cmd, "led ", 4) == 0) {
 		uint16_t r, g, b;
-		int scnt = sscanf(cmd + 3, "%hu%hu%hu", &r, &g, &b);
+		int scnt = sscanf(cmd + 4, "%hu%hu%hu", &r, &g, &b);
 		if(scnt != 3) {
 			logu_s(LOGU_ERROR, "Led brightness parse failed.");
 			return 1;
@@ -620,9 +620,25 @@ static int cmd_parse_body(const char *cmd, struct cmd *store) {
 			logu_s(LOGU_ERROR, "Led brightness too high.");
 			return 1;
 		}
-		store->ledcmd.red = r;
-		store->ledcmd.green = g;
-		store->ledcmd.blue = b;
+		store->ledcmd.color.r = r;
+		store->ledcmd.color.g = g;
+		store->ledcmd.color.b = b;
+		return 4;
+	} else if (strncmp(cmd, "ledgrad ", 8) == 0) {
+		uint16_t r, g, b, intv;
+		int scnt = sscanf(cmd + 8, "%hu%hu%hu%hu", &r, &g, &b, &intv);
+		if(scnt != 4) {
+			logu_s(LOGU_ERROR, "Led gradient parse failed.");
+			return 1;
+		}
+		if(r > 255 || g > 255 || b > 255) {
+			logu_s(LOGU_ERROR, "led brightness too high.");
+			return 1;
+		}
+		store->ledcmd.color.r = r;
+		store->ledcmd.color.g = g;
+		store->ledcmd.color.b = b;
+		store->ledcmd.ms = intv;
 		return 4;
 	} else {
 		logu_s(LOGU_ERROR, "Command parse failed");
@@ -821,7 +837,7 @@ static void wifi_send_tasklist(const char *str, int normalmode) {
 
 HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 	uint8_t msg[8] = {0};
-	msg[0] = machine_id;
+	// msg[0] is unused
 	msg[1] = (uint8_t)cmd->type;
 	switch(cmd->type) {
 		case cmd_motor_stop:
@@ -862,10 +878,14 @@ HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 		case cmd_wifi_settcp:
 		case cmd_wifi_dummy:
 		break;
+		case cmd_led_color_grad_to:
+		msg[5] = (uint8_t)cmd->ledcmd.ms;
+		msg[6] = (uint8_t)cmd->ledcmd.ms >> 8;
+		// no break here
 		case cmd_led_color:
-		msg[2] = cmd->ledcmd.red;
-		msg[3] = cmd->ledcmd.green;
-		msg[4] = cmd->ledcmd.blue;
+		msg[2] = cmd->ledcmd.color.r;
+		msg[3] = cmd->ledcmd.color.g;
+		msg[4] = cmd->ledcmd.color.b;
 		break;
 		default:
 		logu_f(LOGU_ERROR, "CAN Unknown send cmd: %d.", (int)cmd->type);
@@ -873,8 +893,8 @@ HAL_StatusTypeDef cmd_can_send(struct cmd *cmd) {
 	return can_send_cmd(msg, 8, cmd->receiver);
 }
 
-_Bool cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
-	cmd->sender = data[0];
+_Bool cmd_can_read(char* data, uint8_t len, uint8_t from, struct cmd* cmd) {
+	cmd->sender = from;
 	cmd->type = (enum cmdtype)data[1];
 	switch(cmd->type) {
 		case cmd_motor_stop:
@@ -909,10 +929,13 @@ _Bool cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
 		case cmd_wifi_settcp:
 		case cmd_wifi_dummy:
 		break;
+		case cmd_led_color_grad_to:
+		cmd->ledcmd.ms = data[5]  + (data[6] << 8);
+		// no break here
 		case cmd_led_color:
-		cmd->ledcmd.red = data[2];
-		cmd->ledcmd.green = data[3];
-		cmd->ledcmd.blue = data[4];
+		cmd->ledcmd.color.r = data[2];
+		cmd->ledcmd.color.g = data[3];
+		cmd->ledcmd.color.b = data[4];
 		break;
 		default:
 		logu_f(LOGU_ERROR, "CAN Unknown read cmd: %d.", (int)cmd->type);
@@ -921,9 +944,9 @@ _Bool cmd_can_read(char* data, uint8_t len, struct cmd* cmd) {
 	return 1;
 }
 
-void canbuf_read(char *data, size_t len, _Bool isbroadcast, struct lm_handle *plmhandle) {
+void cmd_can_isr(char *data, size_t len, uint8_t from, _Bool isbroadcast, struct lm_handle *plmhandle) {
 	struct cmd cmd = {0};
-	_Bool ok = cmd_can_read(data, len, &cmd);
+	_Bool ok = cmd_can_read(data, len, from, &cmd);
 	if(ok)
 		ok = cmd_action(&cmd, plmhandle);
 	// when receive a broadcast command, machine will only report error.

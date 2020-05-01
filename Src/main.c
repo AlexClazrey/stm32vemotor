@@ -89,11 +89,6 @@ struct lm_handle *plmh = &lmh;
 // usart input buffer
 struct inputbuf userbuf;
 
-// can buffer
-char canbuf[8] = { 0 };
-volatile int canlen = 0;
-_Bool canbroadcast = 0;
-
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -109,7 +104,7 @@ static void MX_TIM1_Init(void);
 void detect_cn1();
 void detect_sw2();
 void detect_sw3();
-void can_cmd_isr(uint8_t *data, uint8_t len, uint8_t from, _Bool isBroadcast);
+void main_can_isr(uint8_t *data, uint8_t len, uint8_t from, _Bool is_broadcast);
 void can_reply_isr(_Bool ok, uint8_t from);
 void led1_flip();
 void led2_flip();
@@ -166,7 +161,7 @@ int main(void) {
 	logu_s(LOGU_DEBUG, "Start initializing.");
 	load_configurations();
 	can_init(machine_id);
-	can_set_cmdlistener(can_cmd_isr);
+	can_set_cmdlistener(main_can_isr);
 	can_set_replylistener(can_reply_isr);
 	// motor init
 	L6470_Configuration1();
@@ -267,11 +262,6 @@ int main(void) {
 		wifi_greet_1();
 #endif
 #endif
-
-		// can cache read
-		if (canlen)
-			canbuf_read(canbuf, canlen, canbroadcast, plmh);
-		canlen = 0;
 
 		// read input buffer and switch
 		command_read(plmh);
@@ -773,15 +763,8 @@ int sw3_pressed() {
 }
 
 // CAN read
-void can_cmd_isr(uint8_t *data, uint8_t len, uint8_t from, _Bool isBroadcast) {
-	// multiple CAN commands in one main cycle will drop and blink led2 quickly
-	if (canlen == 0) {
-		memcpy(canbuf, data, len);
-		canlen = len;
-		canbroadcast = isBroadcast;
-	} else {
-		led2_blink = 200;
-	}
+void main_can_isr(uint8_t *data, uint8_t len, uint8_t from, _Bool is_broadcast) {
+	cmd_can_isr(data, len, from, is_broadcast, plmh);
 }
 
 void can_reply_isr(_Bool ok, uint8_t from) {

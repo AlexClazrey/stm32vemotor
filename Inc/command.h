@@ -3,6 +3,7 @@
 #include "stm32f1xx.h"
 #include "lm.h"
 #include "config.h"
+#include "led.h"
 
 #if WIFI_ENABLE==1
 #include "wifi8266/wifi_8266_mod.h"
@@ -16,7 +17,7 @@ void wifi_tick_callback(Wifi_HandleTypeDef* phwifi, WifiRtnState state, int inde
 #endif
 
 void command_read(struct lm_handle* plmh);
-void canbuf_read(char *data, size_t len, _Bool isbroadcast, struct lm_handle *plmhandle);
+void cmd_can_isr(char *data, size_t len, uint8_t from, _Bool isbroadcast, struct lm_handle *plmhandle);
 
 // 在主循环里面调用这个，当 motor cycle 打开的时候这个函数负责发布命令
 void mcycle_cmd(struct lm_handle *plmh, uint32_t count);
@@ -46,6 +47,7 @@ enum cmdtype {
 	cmd_wifi_settcp,
 	cmd_wifi_dummy,
 	cmd_led_color,
+	cmd_led_color_grad_to,
 };
 
 struct cmd {
@@ -63,10 +65,9 @@ struct cmd {
 				uint8_t percent;
 			};
 		} motorcmd;
-		struct {
-			uint8_t red;
-			uint8_t green;
-			uint8_t blue;
+		struct{ 
+			struct rgb color; 
+			uint16_t ms;
 		} ledcmd;
 		struct {
 			union {
