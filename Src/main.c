@@ -164,8 +164,11 @@ int main(void) {
 	can_set_cmdlistener(main_can_isr);
 	can_set_replylistener(can_reply_isr);
 	// motor init
+	logu_s(LOGU_DEBUG, "Wait 0.3s for L6470 init.");
+	HAL_Delay(300);
 	L6470_Configuration1();
 	lm_init(plmh);
+	// led init
 	led_init(&htim1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_1);
 	// user inputbuf
 	inputbuf_init_stack(&userbuf, &huart1);

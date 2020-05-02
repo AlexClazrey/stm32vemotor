@@ -75,15 +75,15 @@ void L6470_Configuration1(void) {
 	/* 初始化L6470各寄存器初值 */
 	dSPIN_Regs_Struct_Reset(&dSPIN_RegsStruct);
 	/* 加速率的设置为1000 steps/s2，范围14.55至59590 steps/s2*/
-	dSPIN_RegsStruct.ACC = AccDec_Steps_to_Par(1000);										//466);
+	dSPIN_RegsStruct.ACC = AccDec_Steps_to_Par(400);										//466);
 	/* 减速率的设置为1000 steps/s2，范围14.55至59590 steps/s2 */
-	dSPIN_RegsStruct.DEC = AccDec_Steps_to_Par(1000);										//466);
+	dSPIN_RegsStruct.DEC = AccDec_Steps_to_Par(400);										//466);
 	/* 最大速度设置为3000步/秒，最大速度设置范围为15.25至15610步/秒*/
-	dSPIN_RegsStruct.MAX_SPEED = MaxSpd_Steps_to_Par(3000);
+	dSPIN_RegsStruct.MAX_SPEED = MaxSpd_Steps_to_Par(400);
 	/* 最小速度设置为0步/秒，取值范围为0至976.3，步骤/秒*/
 	dSPIN_RegsStruct.MIN_SPEED = MinSpd_Steps_to_Par(0);
-	/* 全步进速度设置2500步/秒，范围为7.63到15625步/秒*/
-	dSPIN_RegsStruct.FS_SPD = FSSpd_Steps_to_Par(2500);										//252);
+	/* 全步进速度设置400步/秒，范围为7.63到15625步/秒*/
+	dSPIN_RegsStruct.FS_SPD = FSSpd_Steps_to_Par(400);										//252);
 	/* 这里要注意不同型号的电机需要的占空比很不一样，需要调整下面的四个数字 */
 	/*保持占空比（转矩）设定为10％，范围在0到99.6％*/
 	dSPIN_RegsStruct.KVAL_HOLD = Kval_Perc_to_Par(10);
@@ -94,7 +94,7 @@ void L6470_Configuration1(void) {
 	/* 减速的占空比（转矩）设定为15％，范围在0到99.6％ */
 	dSPIN_RegsStruct.KVAL_DEC = Kval_Perc_to_Par(15);
 	/* 加速/减速曲线斜率的速度值。 range 0 to 3906 steps/s */
-	dSPIN_RegsStruct.INT_SPD = IntSpd_Steps_to_Par(500);									//200);
+	dSPIN_RegsStruct.INT_SPD = IntSpd_Steps_to_Par(200);									//200);
 	/* 加减速——开始斜率(反电动势)BEMF补偿设置 0 to 0.4% s/step */
 	dSPIN_RegsStruct.ST_SLP = BEMF_Slope_Perc_to_Par(0.038);
 	/* 加速度——结束斜率（反电动势）BEMF补偿设置 0 to 0.4% s/step */
@@ -146,14 +146,16 @@ uint8_t L6470_BUSY1(void) {
  * 返    回：无
  ******************************************************************/
 void dSPIN_Registers_Set(dSPIN_RegsStruct_TypeDef* dSPIN_RegsStruct) {
+	dSPIN_Set_Param(dSPIN_STEP_MODE, dSPIN_RegsStruct->STEP_MODE);
+	dSPIN_Set_Param(dSPIN_ACC, dSPIN_RegsStruct->ACC);
+	dSPIN_Set_Param(dSPIN_DEC, dSPIN_RegsStruct->DEC);
+	dSPIN_Set_Param(dSPIN_MIN_SPEED, dSPIN_RegsStruct->MIN_SPEED);
+	dSPIN_Set_Param(dSPIN_MAX_SPEED, dSPIN_RegsStruct->MAX_SPEED);
+	dSPIN_Set_Param(dSPIN_SPEED, dSPIN_RegsStruct->SPEED);
+	dSPIN_Set_Param(dSPIN_ALARM_EN, dSPIN_RegsStruct->ALARM_EN);
 	dSPIN_Set_Param(dSPIN_ABS_POS, dSPIN_RegsStruct->ABS_POS);
 	dSPIN_Set_Param(dSPIN_EL_POS, dSPIN_RegsStruct->EL_POS);
 	dSPIN_Set_Param(dSPIN_MARK, dSPIN_RegsStruct->MARK);
-	dSPIN_Set_Param(dSPIN_SPEED, dSPIN_RegsStruct->SPEED);
-	dSPIN_Set_Param(dSPIN_ACC, dSPIN_RegsStruct->ACC);
-	dSPIN_Set_Param(dSPIN_DEC, dSPIN_RegsStruct->DEC);
-	dSPIN_Set_Param(dSPIN_MAX_SPEED, dSPIN_RegsStruct->MAX_SPEED);
-	dSPIN_Set_Param(dSPIN_MIN_SPEED, dSPIN_RegsStruct->MIN_SPEED);
 	dSPIN_Set_Param(dSPIN_FS_SPD, dSPIN_RegsStruct->FS_SPD);
 	dSPIN_Set_Param(dSPIN_KVAL_HOLD, dSPIN_RegsStruct->KVAL_HOLD);
 	dSPIN_Set_Param(dSPIN_KVAL_RUN, dSPIN_RegsStruct->KVAL_RUN);
@@ -166,8 +168,6 @@ void dSPIN_Registers_Set(dSPIN_RegsStruct_TypeDef* dSPIN_RegsStruct) {
 	dSPIN_Set_Param(dSPIN_K_THERM, dSPIN_RegsStruct->K_THERM);
 	dSPIN_Set_Param(dSPIN_OCD_TH, dSPIN_RegsStruct->OCD_TH);
 	dSPIN_Set_Param(dSPIN_STALL_TH, dSPIN_RegsStruct->STALL_TH);
-	dSPIN_Set_Param(dSPIN_STEP_MODE, dSPIN_RegsStruct->STEP_MODE);
-	dSPIN_Set_Param(dSPIN_ALARM_EN, dSPIN_RegsStruct->ALARM_EN);
 	dSPIN_Set_Param(dSPIN_CONFIG, dSPIN_RegsStruct->CONFIG);
 }
 
@@ -194,26 +194,18 @@ void dSPIN_Set_Param(dSPIN_Registers_TypeDef param, uint32_t value) {
 	dSPIN_Communicate_Byte(dSPIN_SET_PARAM | param);
 	switch (param) {
 	case dSPIN_ABS_POS:
-		;
 	case dSPIN_MARK:
-		;
 	case dSPIN_SPEED:
 		/* Send parameter - byte 2 to dSPIN */
 		dSPIN_Communicate_Byte((uint8_t) (value >> 16));
+	case dSPIN_EL_POS:
 	case dSPIN_ACC:
-		;
 	case dSPIN_DEC:
-		;
 	case dSPIN_MAX_SPEED:
-		;
 	case dSPIN_MIN_SPEED:
-		;
 	case dSPIN_FS_SPD:
-		;
 	case dSPIN_INT_SPD:
-		;
 	case dSPIN_CONFIG:
-		;
 	case dSPIN_STATUS:
 		/* Send parameter - byte 1 to dSPIN */
 		dSPIN_Communicate_Byte((uint8_t) (value >> 8));
@@ -239,42 +231,23 @@ uint32_t dSPIN_Get_Param(dSPIN_Registers_TypeDef param) {
 	/* MSB which should be 0 */
 	temp = temp << 24;
 	rx |= temp;
-	switch (param) {
-	case dSPIN_ABS_POS:
-		rx |= dSPIN_Communicate_Byte(0) << 16;
-		rx |= dSPIN_Communicate_Byte(0) << 8;
-		rx |= dSPIN_Communicate_Byte(0);
-		break;
-	case dSPIN_MARK:
-		break;
-	case dSPIN_SPEED:
-		rx |= dSPIN_Communicate_Byte(0) << 16;
-		rx |= dSPIN_Communicate_Byte(0) << 8;
-		rx |= dSPIN_Communicate_Byte(0);
-		break;
-	case dSPIN_ACC:
-		break;
-	case dSPIN_DEC:
-		break;
-	case dSPIN_MAX_SPEED:
-		break;
-	case dSPIN_MIN_SPEED:
-		break;
-	case dSPIN_FS_SPD:
-		break;
-	case dSPIN_INT_SPD:
-		break;
-	case dSPIN_CONFIG:
-		break;
-	case dSPIN_STATUS:
-		temp = dSPIN_Communicate_Byte((uint8_t) (0x00));
-		temp = temp << 8;
-		rx |= temp;
-		break;
-	default:
-		temp = dSPIN_Communicate_Byte((uint8_t) (0x00));
-		rx |= temp;
-		break;
+	switch (param) 	{
+		case dSPIN_ABS_POS:
+		case dSPIN_MARK:
+		case dSPIN_SPEED:
+			rx |= dSPIN_Communicate_Byte(0) << 16;
+		case dSPIN_EL_POS:
+		case dSPIN_ACC:
+		case dSPIN_DEC:
+		case dSPIN_MAX_SPEED:
+		case dSPIN_MIN_SPEED:
+		case dSPIN_FS_SPD:
+		case dSPIN_INT_SPD:
+		case dSPIN_CONFIG:
+		case dSPIN_STATUS:
+			rx |= dSPIN_Communicate_Byte(0) << 8;
+		default:
+			rx |= dSPIN_Communicate_Byte(0);
 	}
 	return rx;
 }

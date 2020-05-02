@@ -116,6 +116,7 @@ static int lm_commit_cmd(struct lm_cmd *cmd, volatile struct lm_model *model) {
 			dSPIN_Hard_Stop();
 			logu_f(LOGU_TRACE, "Stop previous movement.");
 		}
+		logu_f(LOGU_INFO, "pos: %ld", cmd->pos_speed);
 		dSPIN_Go_To(cmd->pos_speed);
 		logu_f(LOGU_TRACE, "LM pos: %ld", cmd->pos_speed);
 		model->state = lm_state_pos;
