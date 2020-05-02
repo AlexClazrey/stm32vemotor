@@ -39,7 +39,7 @@ void can_set_id(uint16_t id) {
 	uint32_t cmdid = make_packet_id(CMD_HEADER, 0, id);
 	// this filter has index 0 on FIFO0
 	CAN_FilterTypeDef filter_cmd = {
-		.FilterIdHigh = (cmdid >> 16),
+		.FilterIdHigh = (cmdid >> 13),
 		.FilterIdLow = (cmdid << 3) & 0xFFFF,
 		.FilterMaskIdHigh = 0xE007,
 		.FilterMaskIdLow = 0xFFF8,
@@ -68,7 +68,7 @@ void can_set_id(uint16_t id) {
 	// this filter has index 0 on FIFO1
 	uint32_t replyokid = make_packet_id(REPLY_OK_HEADER, 0, id);
 	CAN_FilterTypeDef filter_reply_ok = {
-		.FilterIdHigh = (replyokid >> 16),
+		.FilterIdHigh = (replyokid >> 13),
 		.FilterIdLow = (replyokid << 3) & 0xFFFF,
 		.FilterMaskIdHigh = 0xE007,
 		.FilterMaskIdLow = 0xFFF8,
@@ -82,7 +82,7 @@ void can_set_id(uint16_t id) {
 
 	uint32_t replybadid = make_packet_id(REPLY_BAD_HEADER, 0, id);
 	CAN_FilterTypeDef filter_reply_bad = {
-		.FilterIdHigh = (replybadid >> 16),
+		.FilterIdHigh = (replybadid >> 13),
 		.FilterIdLow = (replybadid << 3) & 0xFFFF,
 		.FilterMaskIdHigh = 0xE007,
 		.FilterMaskIdLow = 0xFFF8,
@@ -115,14 +115,15 @@ HAL_StatusTypeDef can_send_cmd(uint8_t *data, uint8_t len, uint16_t to) {
 }
 
 HAL_StatusTypeDef can_send_reply(uint8_t to, _Bool ok) {
-	static uint8_t emptydata[8] = {0};
+	static uint8_t data[8] = {0};
 	CAN_TxHeaderTypeDef txh = {0};
 	txh.ExtId = make_packet_id(ok ? REPLY_OK_HEADER : REPLY_BAD_HEADER, can_selfid, to);
+	data[0] = can_selfid >> 8;
 	txh.IDE = CAN_ID_EXT;
 	txh.RTR = CAN_RTR_DATA;
-	txh.DLC = 0;
+	txh.DLC = 1;
 	txh.TransmitGlobalTime = DISABLE;
-	return HAL_CAN_AddTxMessage(&hcan, &txh, emptydata, &can_tx_mailbox_used);
+	return HAL_CAN_AddTxMessage(&hcan, &txh, data, &can_tx_mailbox_used);
 }
 
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *pcan) {

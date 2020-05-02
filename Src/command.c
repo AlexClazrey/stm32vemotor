@@ -20,10 +20,6 @@
 /* Configuration 设置项目 */
 #include "config.h"
 
-#ifndef UART_INPUT_BUF_SIZE 
-#define UART_INPUT_BUF_SIZE 300
-#endif
-
 #if WIFI_ENABLE == 1
 // WiFi
 // 这里写得丑了一点强行引用
@@ -231,11 +227,11 @@ static void cmd2lmcmd(struct cmd* cmd, struct lm_cmd* lmcmd) {
 	}
 }
 
+static char idstr[12] = {0}; // WiFi Send needs a global memory
 static void input_feedback_raw(enum cmdfrom from, char* cstr);
 // return true for success
 static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 	struct lm_cmd lmcmd = {0};
-	char idstr[12] = {0};
 	int32_t target;
 	// any input except "mcycle" will turn off motor cycle test
 	if (lm_cycle) {
@@ -266,7 +262,7 @@ static _Bool cmd_action(struct cmd* cmd, struct lm_handle* plmh) {
 		can_set_id(machine_id);
 		break;
 		case cmd_setting_show_id:
-		snprintf(idstr, 12, "<%hu>", machine_id);
+		snprintf(idstr, 12, "<%hu>\r\n", machine_id);
 		input_feedback_raw(cmd->from, idstr);
 		break;
 		case cmd_setting_mcycle:
@@ -687,21 +683,34 @@ static int read_mr_args(const char *cmd, uint32_t *out_speed, uint32_t *out_dir)
 // WiFi receive
 // 先用一个缓冲区收集输入，然后在主循环里面调取解析函数
 // 解析函数可以使用 inputbuf_read_one_cmd
+
+static char wifi_command_buffer[WIFI_RECV_BUFFER_SIZE] = {0};
 void wifi_parse_cmd(struct lm_handle *plmh) {
-	const char *cmd = wifi_rx_cap(&hwifi);
-	if (cmd == NULL)
+	const char *wifi_raw = wifi_rx_cap(&hwifi);
+	if (wifi_raw == NULL)
 		return;
-	const char *ipdstr = strstr(cmd, "\r\n+IPD,");
+	const char *ipdstr = strstr(wifi_raw, "\r\n+IPD,");
 	if (ipdstr != NULL) {
 		const char *s1 = strchr(ipdstr, ':');
 		if (s1 == NULL) {
-			logu_f(LOGU_ERROR, "WiFi received an invalid data: %s", cmd);
+			logu_f(LOGU_ERROR, "WiFi received an invalid data: %s", wifi_raw);
 			return;
 		}
-		int startindex = s1 - cmd + 1;
-		enum inputcmdtype type = cmd_read_act(cmd + startindex, plmh, CMD_FROM_WIFI, 0);
-		if (type != input_empty)
-			logu_f(LOGU_DEBUG, "WiFi received command type: %d", (int) type);
+		wifi_raw = s1 + 1;
+		memset(wifi_command_buffer, 0, WIFI_RECV_BUFFER_SIZE);
+		strcpy(wifi_command_buffer, wifi_raw);
+		logu_f(LOGU_INFO, "WiFi received: %s", wifi_command_buffer);
+		char *cmd = wifi_command_buffer;
+		int cmdlen;
+		while((cmdlen = strcspn(cmd, "\r\n")) > 0) {
+			cmd[cmdlen] = 0;
+			cmd_read_act(cmd, plmh, CMD_FROM_WIFI, 0);
+			cmd += cmdlen + 1;
+			if(*cmd == '\n') {
+				// in case of \r\n
+				cmd++;
+			}
+		}
 	}
 }
 
@@ -844,7 +853,7 @@ void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int inde
 		logu_f(LOGU_INFO, "WiFi task list %s finished", tasksname);
 }
 #else
-static void wifi_send_tasklist(const char *str, int normalmode) {
+void wifi_send_tasklist(const char *str, int normalmode) {
 }
 #endif
 

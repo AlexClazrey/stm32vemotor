@@ -765,18 +765,18 @@ int sw3_pressed() {
 
 // CAN read
 void main_can_isr(uint8_t *data, uint8_t len, uint16_t from, _Bool is_broadcast) {
-	cmd_can_isr((char*)data, len, from, is_broadcast, plmh);
+	cmd_can_isr((char*) data, len, from, is_broadcast, plmh);
 }
 
 void can_reply_isr(_Bool ok, uint16_t from) {
-	char buf[40];
+	static char buf[40];
 	char *st = ok ? "OK" : "FAIL";
 	int len = snprintf(buf, 40, "<#%hu %s>\r\n", from, st);
 	if (len > 0 && len < 40) {
 		logu_raw(buf, len);
-		#if WIFI_ENABLE == 1
+#if WIFI_ENABLE == 1
 		wifi_send_tasklist(buf, 0);
-		#endif
+#endif
 	} else {
 		led2_blink = 1000;
 	}
