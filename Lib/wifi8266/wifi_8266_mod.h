@@ -5,10 +5,10 @@
 /* Configurations */
 #define WIFI_ARGV_SIZE 3
 #define WIFI_STACK_SIZE 5
-#define WIFI_TASK_SIZE 40
+#define WIFI_TASK_SIZE 200
 
-#define WIFI_RECV_BUFFER_SIZE 500
-#define WIFI_RECV_DMA_RANGE 495
+#define WIFI_RECV_BUFFER_SIZE 1000
+#define WIFI_RECV_DMA_RANGE 995
 
 // instruction return state, whether ok or error
 typedef enum {

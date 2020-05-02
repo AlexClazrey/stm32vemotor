@@ -40,8 +40,8 @@
 
 /* ---- Settings ---- */
 #define LOG_HEAD_BUF_SIZE 30
-#define LOG_LINE_BUF_SIZE 250
-#define LOG_TOTAL_BUF_SIZE 4000
+#define LOG_LINE_BUF_SIZE 1200
+#define LOG_TOTAL_BUF_SIZE 6000
 #define LOG_LINES_COUNT 60
 #define LOG_BAUDRATE 115200
 

@@ -41,7 +41,7 @@
 // 我们设置成两个主循环的大小不会丢失数据。
 // 当它是栈内存模式时，在这里设置使用的参数
 #ifndef INPUTBUF_BUFSIZE 
-#define INPUTBUF_BUFSIZE  300
+#define INPUTBUF_BUFSIZE  700
 #endif
 #ifndef INPUTBUF_DMA_RANGE
 #define INPUTBUF_DMA_RANGE INPUTBUF_BUFSIZE

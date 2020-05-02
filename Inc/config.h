@@ -8,7 +8,7 @@
 #define WIFI_ENABLE 1
 
 // 初始化的时候要做的事情。
-#define INIT_MOTOR_MOVE 1
+#define INIT_MOTOR_MOVE 0
 #define INIT_WIFI_CONNECT 1
 
 // WiFi每十秒发送一句问好
