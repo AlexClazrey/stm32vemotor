@@ -503,6 +503,13 @@ WifiRtnState wifi_setmodetrans_normal(Wifi_HandleTypeDef *hwifi) {
     wifi_frame_add(hwifi, wifi_checkrecvsignal, HAL_GetTick() + TIMEOUTSHORT, wifi_trigger_atsignal);
     return WRS_OK;
 }
+WifiRtnState wifi_setdhcp_on(Wifi_HandleTypeDef *hwifi) {
+    const char *inst = "AT+CWDHCP=1,1\r\n";
+    HAL_StatusTypeDef sent = wifi_send_str(hwifi, inst);
+    CHECKSENT;
+    wifi_frame_add(hwifi, wifi_checkrecvsignal, HAL_GetTick() + TIMEOUTSHORT, wifi_trigger_atsignal);
+    return WRS_OK;
+}
 
 static WifiRtnState wifi_tcpconn_2(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine);
 char connbuf[100];

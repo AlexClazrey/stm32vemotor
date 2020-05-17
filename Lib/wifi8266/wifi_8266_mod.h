@@ -109,6 +109,7 @@ WifiRtnState wifi_scanap(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_setsingleconn(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_setmodetrans_unvarnished(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_setmodetrans_normal(Wifi_HandleTypeDef *hwifi);
+WifiRtnState wifi_setdhcp_on(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_tcpconn(Wifi_HandleTypeDef *hwifi, const char *ip, uint16_t port);
 WifiRtnState wifi_tcpconn_args(Wifi_HandleTypeDef *hwifi, int argc, int *argv);
 WifiRtnState wifi_dropsingleconn(Wifi_HandleTypeDef *hwifi);

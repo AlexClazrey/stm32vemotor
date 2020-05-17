@@ -744,13 +744,14 @@ void wifi_autosetup_tasklist() {
 	// 3. AT+CWMODE=1
 	// 4. AT+CIPMUX=0
 	// 5. AT+CIPMODE=1
-	// 6. JOIN AP
-	// 7. CONNECT TCP
-	// 8. Start send mode
-	// 9. Send Hello
-	// 10. delay
-	// 11. Exit send mode
-	// 12. check "AT"
+	// 6. SET DHCP ON
+	// 7. JOIN AP
+	// 8. CONNECT TCP
+	// 9. Start send mode
+	// 10. Send Hello
+	// 11. delay
+	// 12. Exit send mode
+	// 13. check "AT"
 	logu_s(LOGU_INFO, "Start WiFi Auto Setup task list.");
 	snprintf(wifi_autosetup_greet_buf, 50, "Machine %hu greetings ($ a $).\r\n", machine_id);
 	wifi_task_setlistname(&hwifi, wifi_autosetup_tasklist_name);
@@ -760,6 +761,7 @@ void wifi_autosetup_tasklist() {
 	wifi_task_add(&hwifi, wifi_setmodewifi_client);
 	wifi_task_add(&hwifi, wifi_setsingleconn);
 	wifi_task_add(&hwifi, wifi_setmodetrans_normal);
+	wifi_task_add(&hwifi, wifi_setdhcp_on);
 	wifi_task_add_withargs(&hwifi, wifi_joinap_args, wifi_autosetup_joinap_taskname, 2, (int[] ) { (int) wifi_conf_ssid,
 					(int) wifi_conf_pwd });
 	wifi_task_add_withargs(&hwifi, wifi_tcpconn_args, wifi_autosetup_tcpconn_taskname, 2, (int[] ) { (int) wifi_conf_tcpip,
