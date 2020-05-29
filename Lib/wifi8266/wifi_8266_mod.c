@@ -290,6 +290,7 @@ static int wifi_tick_frame_go_on(Wifi_HandleTypeDef *hwifi, struct wifi_stack_it
     return 0;
 }
 
+
 /* always returns zero */
 static int wifi_tick_frame_timeout(Wifi_HandleTypeDef *hwifi, struct wifi_stack_item *sti, WifiRtnState *out_result) {
     *out_result = wifi_frame_run(hwifi, 1, sti);
@@ -545,6 +546,32 @@ WifiRtnState wifi_dropsingleconn(Wifi_HandleTypeDef *hwifi) {
     CHECKSENT;
     wifi_frame_add(hwifi, wifi_checkrecvsignal, HAL_GetTick() + TIMEOUTSHORT, wifi_trigger_atsignal);
     return WRS_OK;
+}
+
+static int wifi_trigger_cipstatus(const char* data) {
+	return strhas(data, "STATUS:");
+}
+
+WifiRtnState wifi_checkconnection_2(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine);
+WifiRtnState wifi_checkconnection(Wifi_HandleTypeDef *hwifi) {
+	const char *inst = "AT+CIPSTATUS\r\n";
+	HAL_StatusTypeDef sent = wifi_send_str(hwifi, inst);
+	CHECKSENT;
+	wifi_frame_add(hwifi, wifi_checkconnection_2, HAL_GetTick() + TIMEOUTSHORT, wifi_trigger_cipstatus);
+	return WRS_OK;
+}
+
+//
+//2: Got IP
+//3: Connected
+//4: Disconnected
+//5: Disconnect AP
+WifiRtnState wifi_checkconnection_2(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine) {
+	const char* sig = strstr(hwifi->recv.data, "STATUS:") + 7;
+	if(*sig == '3')
+		return WRS_OK;
+	else
+		return WRS_ERROR;
 }
 
 WifiRtnState wifi_send_normal_2(Wifi_HandleTypeDef *hwifi, int timeisout, WifiRtnState subroutine, int argc, int* argv); 

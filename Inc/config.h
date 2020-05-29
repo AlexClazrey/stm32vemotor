@@ -8,11 +8,24 @@
 #define WIFI_ENABLE 1
 
 // 初始化的时候要做的事情。
-#define INIT_MOTOR_MOVE 0
+#define INIT_MOTOR_MOVE 1
 #define INIT_WIFI_CONNECT 1
+
+// 每个板子连接WiFi的时间差异，现在是50ms。
+#define WIFI_INIT_CONNECT_TIME_INTEVAL 50
+
+// 如果发送命令回复的时候失败那么尝试重新连接
+#define WIFI_RECONNECT_WHEN_SEND_FAILED 1
 
 // WiFi每十秒发送一句问好
 #define WIFI_GREET 0
+// 如果问好失败那么重新连接
+#define WIFI_RECONNECT_WHEN_GREET_FAILED 0
+
+// WiFi每十秒钟检查一次TCP连接
+#define WIFI_CHECK_TCP 1
+// 如果检查失败那么重新连接
+#define WIFI_RECONNECT_WHEN_CHECK_FAILED 1
 
 // WiFi Length Limit
 #define WIFI_STRSIZE 40

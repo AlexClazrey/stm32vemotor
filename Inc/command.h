@@ -15,6 +15,7 @@ void wifi_greet_1();
 void wifi_parse_cmd(struct lm_handle* plmh);
 void wifi_tick_callback(Wifi_HandleTypeDef* phwifi, WifiRtnState state, int index, int finished);
 void wifi_send_tasklist(const char *str, int normalmode);
+_Bool wifi_check_connection_tasklist();
 #else
 void wifi_send_tasklist(const char *str, int normalmode);
 #endif

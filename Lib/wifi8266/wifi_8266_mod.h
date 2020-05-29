@@ -118,6 +118,7 @@ WifiRtnState wifi_send_normal_args(Wifi_HandleTypeDef *hwifi, int argc, int* arg
 WifiRtnState wifi_startsend_unvarnished(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_stopsend_unvarnished(Wifi_HandleTypeDef *hwifi);
 WifiRtnState wifi_task_delay(Wifi_HandleTypeDef* hwifi, int argc, int *argv);
+WifiRtnState wifi_checkconnection(Wifi_HandleTypeDef *hwifi);
 
 HAL_StatusTypeDef wifi_send_str(Wifi_HandleTypeDef *hwifi, const char *data);
 HAL_StatusTypeDef wifi_send_raw(Wifi_HandleTypeDef *hwifi, const char *buffer, size_t len);

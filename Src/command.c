@@ -27,6 +27,7 @@ extern UART_HandleTypeDef huart2;
 static Wifi_HandleTypeDef hwifi = { .huart = &huart2 };
 static int wifi_change_to_raw_when_success = 0;
 static int wifi_pipe_raw = 0;
+static _Bool wifi_reconnecting = 0;
 #endif
 
 // motor cycle test
@@ -41,6 +42,11 @@ void command_switch_read(struct lm_handle *plmhandle);
 void command_read(struct lm_handle *plmhandle) {
 	uart_user_inputbuf_read(plmhandle);
 	command_switch_read(plmhandle);
+	if(wifi_reconnecting && cycletick_everyms(5000 + machine_id * 5)) {
+		logu_s(LOGU_INFO, "Wifi reconnect started.");
+		wifi_autosetup_tasklist();
+		wifi_reconnecting = 0;
+	}
 }
 // ------------- Switch Process
 int sw2_previous = 0, sw3_previous = 0;
@@ -396,7 +402,7 @@ static enum inputcmdtype cmd_parse(const char *cmd, struct cmd *out_store) {
 
 	if (res == 1) {
 		return input_error;
-	}  
+	}
 	if (receiver == machine_id || receiver == (uint16_t) -1) {
 		if (res == 0) {
 			return input_lmcmd;
@@ -808,6 +814,18 @@ void wifi_send_tasklist(const char *str, int normalmode) {
 	wifi_task_add(&hwifi, wifi_checkat);
 }
 
+static const char *wifi_check_connection_tasklist_name="check conn";
+_Bool wifi_check_connection_tasklist() {
+	if (wifi_task_isempty(&hwifi)) {
+		logu_s(LOGU_INFO, "wifi check connection start");
+		wifi_task_setlistname(&hwifi, wifi_check_connection_tasklist_name);
+		wifi_task_add(&hwifi, wifi_checkconnection);
+		return true;
+	} else {
+		return false;
+	}
+}
+
 void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int index, int finished) {
 	if (finished && wifi_change_to_raw_when_success) {
 		wifi_change_to_raw_when_success = 0;
@@ -821,6 +839,7 @@ void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int inde
 	if (index > -1)
 		itemname = wifi_task_getitemname(phwifi, index);
 	if (tasksname == wifi_autosetup_tasklist_name) {
+		wifi_reconnecting = 0;
 		if (state != WRS_OK) {
 			logu_s(LOGU_ERROR, "WiFi Auto Setup task list failed");
 			if (itemname == wifi_autosetup_at_check) {
@@ -843,11 +862,34 @@ void wifi_tick_callback(Wifi_HandleTypeDef *phwifi, WifiRtnState state, int inde
 		if (state != WRS_OK) {
 			logu_s(LOGU_ERROR, "WiFi Greet 1 task list failed");
 			wifi_task_clear(phwifi);
+			#if WIFI_RECONNECT_WHEN_GREET_FAILED
+			if(wifi_reconnecting == 0) {
+				wifi_reconnecting = 1;
+				logu_s(LOGU_INFO, "Wifi reconnect issued.");
+			}
+			#endif
 		}
 	} else if (tasksname == wifi_send_tasklist_name) {
 		if (state != WRS_OK) {
 			logu_s(LOGU_ERROR, "WiFi send task list failed");
 			wifi_task_clear(phwifi);
+			#if WIFI_RECONNECT_WHEN_SEND_FAILED
+			if(wifi_reconnecting == 0) {
+				wifi_reconnecting = 1;
+				logu_s(LOGU_INFO, "Wifi reconnect issued.");
+			}
+			#endif
+		}
+	} else if (tasksname == wifi_check_connection_tasklist_name) {
+		if (state != WRS_OK) {
+			logu_s(LOGU_ERROR, "WiFi check connection task list failed");
+			wifi_task_clear(phwifi);
+#if WIFI_RECONNECT_WHEN_CHECK_FAILED
+			if(wifi_reconnecting == 0) {
+				wifi_reconnecting = 1;
+				logu_s(LOGU_INFO, "Wifi reconnect issued.");
+			}
+#endif
 		}
 	}
 	logu_f(LOGU_DEBUG, "WiFi returns %s on index %d of %s.", rtntostr(state), index, tasksname);

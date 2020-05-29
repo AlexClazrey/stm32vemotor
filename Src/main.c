@@ -174,6 +174,20 @@ int main(void) {
 	inputbuf_init_stack(&userbuf, &huart1);
 	flash_init();
 
+#if WIFI_ENABLE == 1
+	logu_s(LOGU_DEBUG, "Wait 2 seconds for ESP8266 to init.");
+	while (HAL_GetTick() < 2000) {
+	} // wait some time for ESP8266 init
+#if INIT_WIFI_CONNECT == 1
+	uint32_t tick1 = HAL_GetTick();
+	uint32_t wait_time = machine_id * WIFI_INIT_CONNECT_TIME_INTEVAL;
+	logu_f(LOGU_INFO, "Wait %u seconds for non-collision WiFi connection.", wait_time / 1000);
+	while (HAL_GetTick() - tick1 < wait_time) {
+	}
+	wifi_autosetup_tasklist();
+#endif
+#endif
+
 #if INIT_MOTOR_MOVE == 1
 	logu_s(LOGU_DEBUG, "Moving to initial position.");
 	lm_append_newcmd(plmh, lm_cmd_speed, 10000, 1);
@@ -198,15 +212,6 @@ int main(void) {
 	}
 #else
 	logu_s(LOGU_DEBUG, "Skip motor move.");
-#endif
-
-#if WIFI_ENABLE == 1
-	logu_s(LOGU_DEBUG, "Wait 2 seconds for ESP8266 to init.");
-	while (HAL_GetTick() < 2000) {
-	} // wait some time for ESP8266 init
-#if INIT_WIFI_CONNECT == 1
-	wifi_autosetup_tasklist();
-#endif
 #endif
 
 	logu_s(LOGU_DEBUG, "Initialize finished.");
@@ -261,6 +266,10 @@ int main(void) {
 		wifi_parse_cmd(plmh);
 		// wifi tick
 		wifi_tick(wifi_gethandler(), wifi_tick_callback);
+#if WIFI_CHECK_TCP == 1
+		if (cycletick_everyms(10000))
+			wifi_check_connection_tasklist();
+#endif
 
 #if WIFI_GREET == 1
 		// wifi greets every ten second
