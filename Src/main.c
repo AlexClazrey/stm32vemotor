@@ -89,6 +89,8 @@ struct lm_handle *plmh = &lmh;
 // usart input buffer
 struct inputbuf userbuf;
 
+// reset tick
+uint32_t chip_reset_time = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -109,6 +111,7 @@ void can_reply_isr(_Bool ok, uint16_t from);
 void led1_flip();
 void led2_flip();
 void txcplt_report();
+void stm_chip_reset_commit();
 void load_configurations();
 /* USER CODE END PFP */
 
@@ -238,6 +241,10 @@ int main(void) {
 	/* USER CODE BEGIN WHILE */
 	while (1) {
 		cycletick_start();
+		if(chip_reset_time && HAL_GetTick() > chip_reset_time) {
+			stm_chip_reset_commit();
+		}
+
 		if (led1_blink) {
 			if (cycletick_everyms(led1_blink)) {
 				led1_flip();
@@ -296,7 +303,6 @@ int main(void) {
 		struct lm_model lmmod = plmh->mod; // make a copy of volatile model
 
 		// if cn1 is pressed only stop 1 - FWD - close direction
-		// TODO add pos detection after implementing read pos function
 		if (cn1_pressed()) {
 			// cn1 按下的时候重置 home，这个只能在按下期间执行，
 			// 因为在 pos 状态下重置 home 会发生惨剧，会把现在高速移动的某个位置标记成HOME，
@@ -309,7 +315,8 @@ int main(void) {
 				logu_s(LOGU_INFO, "Set home");
 				lcf->type = lm_cmd_set_home;
 			}
-			if ((lcf->type == lm_cmd_speed && lcf->dir_hard == 1) || (lcf->type == lm_cmd_relapos && lcf->pos_speed > 0)
+			if ((lcf->type == lm_cmd_speed && lcf->dir_hard == 1)
+					|| (lcf->type == lm_cmd_relapos && lcf->pos_speed > 0)
 					|| ((lmmod.state == lm_state_speed || lmmod.state == lm_state_relapos) && lmmod.dir == 1)
 					|| (lcf->type == lm_cmd_pos && lcf->pos_speed > 0)
 					|| (lmmod.state == lm_state_pos && lmmod.pos > 0)) {
@@ -614,20 +621,30 @@ static void MX_GPIO_Init(void) {
 	/* GPIO Ports Clock Enable */
 	__HAL_RCC_GPIOC_CLK_ENABLE();
 	__HAL_RCC_GPIOA_CLK_ENABLE();
-	__HAL_RCC_GPIOE_CLK_ENABLE();
 	__HAL_RCC_GPIOB_CLK_ENABLE();
+	__HAL_RCC_GPIOE_CLK_ENABLE();
+
+	/*Configure GPIO pin Output Level */
+	HAL_GPIO_WritePin(GPIOC, Break1_Pin | Led2_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
 	HAL_GPIO_WritePin(GPIOA, L6470CS_Pin | Led1_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pin Output Level */
-	HAL_GPIO_WritePin(Led2_GPIO_Port, Led2_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(Break2_GPIO_Port, Break2_Pin, GPIO_PIN_RESET);
 
 	/*Configure GPIO pins : L6470Flag_Pin L6470Busy_Pin */
 	GPIO_InitStruct.Pin = L6470Flag_Pin | L6470Busy_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
 	GPIO_InitStruct.Pull = GPIO_PULLUP;
 	HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+	/*Configure GPIO pin : Break1_Pin */
+	GPIO_InitStruct.Pin = Break1_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(Break1_GPIO_Port, &GPIO_InitStruct);
 
 	/*Configure GPIO pins : SW2_Pin SW3_Pin */
 	GPIO_InitStruct.Pin = SW2_Pin | SW3_Pin;
@@ -641,6 +658,13 @@ static void MX_GPIO_Init(void) {
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+	/*Configure GPIO pin : Break2_Pin */
+	GPIO_InitStruct.Pin = Break2_Pin;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	HAL_GPIO_Init(Break2_GPIO_Port, &GPIO_InitStruct);
 
 	/*Configure GPIO pin : CN1_Pin */
 	GPIO_InitStruct.Pin = CN1_Pin;
@@ -843,6 +867,16 @@ void load_configurations() {
 		logu_f(LOGU_INFO, "using limit_out: %d.", lm_conf_limit_out);
 	}
 	logu_s(LOGU_DEBUG, "Finish loading config.");
+}
+
+// Chip reset
+void stm_chip_reset(uint32_t tick) {
+	logu_f(LOGU_WARN, "RESET CHIP IN %u MS.", tick);
+	chip_reset_time = HAL_GetTick() + tick;
+}
+void stm_chip_reset_commit() {
+	chip_reset_time = 0;
+	HAL_NVIC_SystemReset();
 }
 
 /* USER CODE END 4 */

@@ -53,6 +53,7 @@ enum cmdtype {
 	cmd_wifi_dummy,
 	cmd_led_color,
 	cmd_led_color_grad_to,
+	cmd_chip_reset,
 };
 
 enum cmdfrom {
